@@ -11,6 +11,8 @@ final class AppState {
     var userProfile: UserProfile?
     let healthKitManager = HealthKitManager()
     var todaysMacroTargets: MacroTargets?
+    /// Set when today's DayLog/effort is computed (Phase 4+). Nil = show placeholder in dashboard.
+    var todaysEffortLevel: EffortLevel?
 
     var isOnboardingComplete: Bool { userProfile != nil }
 

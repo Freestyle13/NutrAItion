@@ -9,9 +9,9 @@ import SwiftUI
 struct ContentView: View {
     var body: some View {
         TabView {
-            Text("Coming soon")
+            DashboardView()
                 .tabItem { Label("Dashboard", systemImage: "house") }
-            Text("Coming soon")
+            FoodLogView()
                 .tabItem { Label("Food Log", systemImage: "list.bullet") }
             Text("Coming soon")
                 .tabItem { Label("Chat", systemImage: "message") }
