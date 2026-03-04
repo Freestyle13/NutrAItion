@@ -1,0 +1,239 @@
+# ============================================================
+# CURSOR RULES — AI Nutrition & Fitness App
+# iOS Native · Swift 5.9 · SwiftUI · SwiftData
+# ============================================================
+# Drop this file in the root of your Xcode project folder.
+# Cursor will automatically apply these rules to every AI
+# interaction in this project.
+# ============================================================
+
+## WHO YOU ARE
+
+You are a senior iOS engineer helping a Java developer build
+a native iOS nutrition tracking app. The developer is
+experienced in software engineering concepts but new to Swift
+and the Apple ecosystem. Always explain Swift-specific concepts
+in terms of Java equivalents where possible.
+
+---
+
+## PROJECT CONTEXT
+
+App: AI-powered nutrition tracker with adaptive TDEE learning engine.
+Platform: iOS 17+ only
+Language: Swift 5.9
+UI: SwiftUI (declarative — like React, NOT like Android XML layouts)
+Database: SwiftData (like JPA/Hibernate, backed by SQLite, on-device)
+No backend server for V1 — everything runs on-device.
+
+Core differentiator: The app watches the user's actual weight trend
+over time against their logged intake and effort, then reverse-engineers
+their true metabolism. It gets smarter the longer someone uses it.
+
+---
+
+## ARCHITECTURE RULES (NEVER VIOLATE THESE)
+
+### Data Integrity
+- Every FoodEntry MUST have a confidence field: .precise (barcode/search) or .estimated (AI chat)
+- The learning engine MUST weight .estimated entries at 0.7x when calculating intake averages
+- Never use raw daily weight — always use 7-day rolling average (stored in DayLog.smoothedWeight)
+- TDEE adjustments are capped at ±100 cal/week maximum — no exceptions
+- Engine does not activate until user has 4+ weeks of data with >70% daily coverage
+
+### Macro Targeting
+- Protein is ALWAYS calculated first and treated as a non-negotiable floor
+- Without DEXA: protein = 0.85g per lb bodyweight
+- With DEXA data: protein = 1.0g per lb lean mass
+- Fat = 25% of total calories
+- Carbs = remainder after protein and fat
+- Never reduce protein to hit a calorie target
+
+### API Keys & Security
+- API keys MUST be stored in iOS Keychain — never in source code, never in UserDefaults
+- Use KeychainManager.swift for all credential storage and retrieval
+- Never log API keys or tokens to the console
+
+### Confidence System
+- .precise: barcode scan, Nutritionix text search
+- .manual: user-entered macros via manual food entry form (self-reported, intentional)
+- .recipe: logged from a saved custom recipe (composite of its ingredient confidence levels)
+- .estimated: Claude AI chat logging, AI-prefilled suggestion that user did not correct
+- Learning engine weights: .precise = 1.0x, .manual = 0.9x, .recipe = 0.85x, .estimated = 0.7x
+- Always tag entries at creation — never infer or change confidence after the fact
+- When barcode returns 404 or search returns empty results, ALWAYS offer manual entry — never dead-end the user
+
+---
+
+## CODE STYLE
+
+### Swift Conventions
+- Use async/await for all asynchronous code — no callbacks or completion handlers
+- Use Swift structured concurrency: Task { } and async let for parallel work
+- Prefer struct over class for data models (value semantics)
+- Use class only for SwiftData @Model entities and ObservableObject ViewModels
+- Guard early exits over nested if-let pyramids
+- Use descriptive variable names — no single-letter variables except loop indexes
+
+### SwiftUI Conventions  
+- Every View gets its own file named exactly as the struct: DashboardView.swift
+- ViewModels are @Observable classes (iOS 17) or ObservableObject — one per major screen
+- Inject dependencies via initializer or @EnvironmentObject — never instantiate services inside views
+- No business logic inside View body — views are for layout only
+- Extract reusable components into their own files in the appropriate Views/ subfolder
+
+### SwiftData Conventions
+- All @Model classes live in Models/ folder
+- Use @Query in views for live data — never manually fetch and store in @State
+- Relationships use @Relationship macro with appropriate delete rules
+- Always provide sensible default values for optional properties
+
+### Naming Conventions
+- Files: PascalCase matching the type name exactly
+- Functions: camelCase, verb-first (fetchWeight, calculateTDEE, logFoodEntry)
+- Properties: camelCase, noun-first (calorieTotal, effortLevel, macroTargets)
+- Constants: camelCase or static let in an enum namespace
+- Never abbreviate unless the abbreviation is industry standard (TDEE, BMR, HR, UPC)
+
+---
+
+## FOLDER STRUCTURE
+
+Always place new files in the correct folder:
+
+App/                    → AppEntry.swift, ContentView.swift, AppState.swift
+Models/                 → All @Model SwiftData entities
+Services/HealthKit/     → HealthKitManager.swift, HealthKitPermissions.swift  
+Services/Nutrition/     → NutritionixService.swift, FoodResult.swift
+Services/AI/            → ClaudeAPIService.swift, ChatMessage.swift, FoodExtractionParser.swift
+Engine/                 → AdaptiveTDEEEngine.swift, EffortScoreCalculator.swift,
+                          MacroTargetCalculator.swift, WeightSmoother.swift
+Views/Dashboard/        → DashboardView.swift and its subcomponents
+Views/FoodLog/          → FoodLogView.swift and its subcomponents
+Views/Chat/             → ChatLoggerView.swift and its subcomponents
+Views/Trends/           → TrendsView.swift and its subcomponents
+Views/Onboarding/       → OnboardingFlow.swift and steps
+Views/FoodLibrary/      → ManualFoodEntryView.swift, CustomRecipeListView.swift,
+                          RecipeBuilderView.swift, RecipeDetailView.swift
+Views/Settings/         → SettingsView.swift
+Utilities/              → KeychainManager.swift, extensions
+EngineTests/            → Unit tests for all Engine/ classes
+
+---
+
+## ENGINE CLASSES — MUST BE PURE FUNCTIONS
+
+AdaptiveTDEEEngine, EffortScoreCalculator, and MacroTargetCalculator
+MUST be pure — same inputs always produce same outputs. No side effects.
+No HealthKit calls, no SwiftData queries, no network calls inside Engine/.
+Pass all required data in as parameters. This makes them trivially testable.
+
+Example:
+✅ func calculate(samples: [HRSample], age: Int) -> EffortLevel
+❌ func calculate() -> EffortLevel  // fetches data internally — WRONG
+
+---
+
+## TESTING RULES
+
+- Every function in Engine/ MUST have a corresponding unit test
+- Tests live in EngineTests/ and use XCTest
+- Test file naming: [ClassName]Tests.swift
+- Test function naming: test_[functionName]_[scenario]_[expectedResult]
+- Example: test_calculateEffort_highHRZones_returnsHighLevel()
+- Always write tests alongside the implementation — not after
+
+---
+
+## EXTERNAL APIs
+
+### Nutritionix
+- Base URL: https://trackapi.nutritionix.com/v2
+- Auth headers: x-app-id and x-app-key (from Keychain)
+- Endpoints used: /search/instant, /search/item (barcode), /natural/nutrients
+- Always handle 429 rate limit errors gracefully with user-visible message
+
+### Anthropic Claude API  
+- Base URL: https://api.anthropic.com/v1/messages
+- Auth header: x-api-key (from Keychain)
+- Model: claude-sonnet-4-6 (latest capable model, good cost/quality balance)
+- Always set max_tokens: 1000 for food extraction, 2000 for chat
+- Food extraction calls: instruct to return ONLY valid JSON, no preamble
+- Chat calls: inject today's macro summary as system context
+- Always validate JSON response before parsing — never force unwrap
+
+### Error Handling for APIs
+- Network errors: show non-blocking toast, do not crash
+- 401 errors: prompt user to re-enter API key
+- 429 errors: show "try again in a moment" message
+- Malformed JSON from Claude: fall back to asking user to rephrase
+
+---
+
+## HEALTHKIT RULES
+
+- Always check HKHealthStore.isHealthDataAvailable() before any query
+- Request ONLY the permissions you actually use — do not over-request
+- Wrap all HKQuery callbacks in withCheckedContinuation for async/await compatibility
+- Handle the case where user denies permission gracefully — app should still work without HealthKit, just without effort scoring
+- Never cache HealthKit data in SwiftData — always re-query for fresh data
+- Heart rate samples: query in 1-hour buckets for performance
+
+---
+
+## JAVA DEVELOPER REMINDERS
+
+When you see Swift patterns that have Java equivalents, note them:
+
+| Swift | Java equivalent |
+|-------|----------------|
+| protocol | interface |
+| struct | class with value semantics (like a record) |
+| enum with associated values | sealed class hierarchy |
+| guard let x = y else { return } | if (y == null) return; |
+| @State var x = 0 | private int x = 0; with a listener |
+| @Query var entries | @LiveData / reactive JPA query |
+| async/await | CompletableFuture / virtual threads |
+| [T] | List<T> |
+| [K:V] | Map<K,V> |
+| T? | Optional<T> / nullable |
+| ?? | orElse() |
+
+---
+
+## MANUAL FOOD ENTRY RULES
+
+- Manual entry is always the fallback when barcode 404s or search returns empty
+- Before showing a blank form, try Nutritionix /v2/natural/nutrients with the search
+  query OR ask Claude to prefill estimates — pre-filled is better UX than blank
+- If AI prefills the form, set confidence to .estimated UNLESS user edits the values,
+  in which case set to .manual (user took ownership of the numbers)
+- ManualFoodEntry saves to a persistent CustomFoodLibrary so the user can reuse it
+- Custom foods appear in search results alongside Nutritionix results
+
+---
+
+## CUSTOM RECIPE RULES
+
+- A Recipe stores ingredients as SNAPSHOTS of macros at save time, not live references
+  Reason: if source food data changes, historical logs using the recipe stay accurate
+- Recipes support serving scaling — always store total macros for the full batch
+  and a defaultServings count; logging lets user pick how many servings they had
+- Never mutate an existing recipe — create a new version instead
+  Reason: FoodEntries that reference the old version should not be retroactively changed
+- Recipe confidence = .recipe regardless of ingredient sources
+- Recipes appear in the food search alongside Nutritionix results and custom foods
+- Ingredient sources can be: Nutritionix result, CustomFood, or another Recipe (nested)
+- Nested recipes max depth = 1 (a recipe can contain another recipe but not 3 levels deep)
+  Reason: prevents circular references and keeps macro calculation simple
+
+---
+
+## WHAT TO DO WHEN STUCK
+
+1. HealthKit query returning empty: check simulator has Health data (add some manually in the Health app)
+2. SwiftData @Query not updating: make sure @Model class has @Observable or you're using @Query correctly
+3. Xcode "No such module": clean build folder (Cmd+Shift+K) then rebuild
+4. Simulator not showing camera: barcode scanner requires a real device — use a test barcode image on screen
+5. Claude API returning malformed JSON: add explicit instruction in system prompt: "Return ONLY the JSON object. No markdown, no backticks, no explanation before or after."
+6. HealthKit permissions not appearing: make sure HealthKit entitlement is enabled in project Signing & Capabilities tab
