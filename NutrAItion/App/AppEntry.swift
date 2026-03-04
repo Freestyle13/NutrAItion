@@ -18,6 +18,14 @@ struct AppEntry: App {
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
+            // Schema changed (e.g. effortMultipliersData → Data)? Delete the app to recreate the store, or we fall back to in-memory so the app still launches.
+            #if DEBUG
+            print("SwiftData persistent container failed (\(error)); using in-memory store. Delete the app to fix persistent storage.")
+            let inMemory = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+            if let fallback = try? ModelContainer(for: schema, configurations: [inMemory]) {
+                return fallback
+            }
+            #endif
             fatalError("Could not create ModelContainer: \(error)")
         }
     }()

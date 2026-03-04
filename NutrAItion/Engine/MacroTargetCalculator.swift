@@ -6,7 +6,7 @@
 import Foundation
 
 /// Pure calculator: same inputs → same outputs. No HealthKit, SwiftData, or network.
-/// Phase 2 will expand with full protein/fat/carb rules; this stub satisfies AppState for Phase 1.
+/// Protein is always the floor; fat = 25% of calories; carbs = remainder.
 struct MacroTargetCalculator {
     static func calculate(
         tdee: Double,
@@ -20,20 +20,29 @@ struct MacroTargetCalculator {
         case .bulk: calories = tdee + 300
         case .maintain: calories = tdee
         }
-        let proteinKg = leanMassKg ?? bodyWeightKg
-        let proteinG = proteinKg * 2.2 * 0.85 // 0.85g per lb bodyweight
-        let fatCal = calories * 0.25
-        let fatG = fatCal / 9
+
+        let proteinG: Double
+        if let lean = leanMassKg {
+            proteinG = lean * 2.2 * 1.0  // 1.0g per lb lean mass (DEXA)
+        } else {
+            proteinG = bodyWeightKg * 2.2 * 0.85  // 0.85g per lb bodyweight
+        }
+
+        let fatG = (calories * 0.25) / 9
         let proteinCal = proteinG * 4
-        let carbCal = max(0, calories - proteinCal - fatCal)
-        let carbG = carbCal / 4
+        let fatCal = fatG * 9
+        let carbCal = calories - proteinCal - fatCal
+        let carbG = max(0, carbCal) / 4
+        let lowCarbWarning = carbG < 50
+
         return MacroTargets(
             calories: calories,
             protein: proteinG,
             carbs: carbG,
             fat: fatG,
             goalType: goalType,
-            generatedAt: Date()
+            generatedAt: Date(),
+            lowCarbWarning: lowCarbWarning
         )
     }
 }

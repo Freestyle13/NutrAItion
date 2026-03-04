@@ -6,12 +6,6 @@
 import Foundation
 import SwiftData
 
-/// Wraps [String: Double] for SwiftData persistence (SwiftData doesn't persist raw Dictionary).
-struct EffortMultipliersStorage: Codable {
-    var values: [String: Double]
-    init(_ values: [String: Double] = [:]) { self.values = values }
-}
-
 @Model
 final class UserProfile {
     var id: UUID
@@ -21,15 +15,20 @@ final class UserProfile {
     var currentWeightKg: Double
     var goalType: GoalType
     var tdeeEstimate: Double
-    var effortMultipliersData: EffortMultipliersStorage
+    /// JSON-encoded [String: Double]. Persisting as Data avoids Swift 6 main-actor isolation on custom Codable.
+    var effortMultipliersData: Data
     var weeklyAdjustmentCount: Int
     var leanMassKg: Double?
     var createdAt: Date
 
-    /// Per-bucket effort adjustments (e.g. "low" -> 1.0). Stored via EffortMultipliersStorage for SwiftData.
+    /// Per-bucket effort adjustments (e.g. "low" -> 1.0). Backed by effortMultipliersData (JSON).
     var effortMultipliers: [String: Double] {
-        get { effortMultipliersData.values }
-        set { effortMultipliersData = EffortMultipliersStorage(newValue) }
+        get {
+            (try? JSONDecoder().decode([String: Double].self, from: effortMultipliersData)) ?? [:]
+        }
+        set {
+            effortMultipliersData = (try? JSONEncoder().encode(newValue)) ?? Data()
+        }
     }
 
     init(
@@ -52,7 +51,7 @@ final class UserProfile {
         self.currentWeightKg = currentWeightKg
         self.goalType = goalType
         self.tdeeEstimate = tdeeEstimate
-        self.effortMultipliersData = EffortMultipliersStorage(effortMultipliers)
+        self.effortMultipliersData = (try? JSONEncoder().encode(effortMultipliers)) ?? Data()
         self.weeklyAdjustmentCount = weeklyAdjustmentCount
         self.leanMassKg = leanMassKg
         self.createdAt = createdAt

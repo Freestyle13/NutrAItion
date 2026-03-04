@@ -13,6 +13,8 @@ struct MacroTargets {
     var fat: Double
     var goalType: GoalType
     var generatedAt: Date
+    /// True when carb target is very low (<50g); caller may show a warning.
+    var lowCarbWarning: Bool = false
 
     var summary: String {
         let formatter = NumberFormatter()

@@ -33,11 +33,26 @@ final class EffortScoreCalculatorTests: XCTestCase {
 
     // MARK: - calculate (HR zones)
 
-    func test_calculate_allZone4HR_returnsHigh() {
+    func test_calculate_allZone4HR_returnsVeryHigh() {
         // Age 30 → maxHR 190. Zone 4 = 80–90% → 152–171 bpm. Use 85% = 161.5 bpm.
+        // 30 min all in zone 4 → weighted avg 0.9 → normalized (0.9-0.3)/0.7*100 ≈ 86 → .veryHigh
         let base = Calendar.current.startOfDay(for: Date())
         let samples = (0..<30).map { i in
             makeMockHRSample(bpm: 161.5, date: base.addingTimeInterval(TimeInterval(i * 60)))
+        }
+        let result = calculator.calculate(heartRateSamples: samples, activeCalories: 0, age: 30)
+        XCTAssertEqual(result, .veryHigh)
+    }
+
+    func test_calculate_zone3Zone4Mix_returnsHigh() {
+        // Mix so normalized score lands in 61–80 (.high). 20 min zone 3 (0.7) + 20 min zone 4 (0.9) → 32/40 = 0.8 → ~71
+        let base = Calendar.current.startOfDay(for: Date())
+        var samples: [HKQuantitySample] = []
+        for i in 0..<20 {
+            samples.append(makeMockHRSample(bpm: 142, date: base.addingTimeInterval(TimeInterval(i * 60)))) // zone 3
+        }
+        for i in 0..<20 {
+            samples.append(makeMockHRSample(bpm: 161.5, date: base.addingTimeInterval(TimeInterval((20 + i) * 60)))) // zone 4
         }
         let result = calculator.calculate(heartRateSamples: samples, activeCalories: 0, age: 30)
         XCTAssertEqual(result, .high)
