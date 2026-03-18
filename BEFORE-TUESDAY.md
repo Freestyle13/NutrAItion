@@ -16,8 +16,8 @@ for email confirmations when you're in a flow state on Tuesday.
 5. COPY THE KEY NOW — you only see it once
 6. Paste it somewhere safe (password manager, not a text file)
 
-### Nutritionix API Account
-1. Go to developer.nutritionix.com
+### USDA FoodData Central API Key
+1. Go to api.nal.usda.gov
 2. Sign up for free account
 3. Create an application (name it anything)
 4. Copy your App ID and App Key

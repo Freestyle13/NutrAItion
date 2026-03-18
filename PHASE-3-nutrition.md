@@ -1,212 +1,320 @@
 # PHASE 3 — Nutrition Logging (Barcode + Search)
-# Nutritionix API + barcode scanner + food log UI
+# Open Food Facts (barcode) + USDA FoodData Central (search)
+# Replaces Nutritionix which discontinued free/personal access.
 # Complete Phase 2 before starting this.
 # =========================================================
 
+# APIs USED IN THIS PHASE
+
+## Open Food Facts — Barcode Lookup
+- Base URL: https://world.openfoodfacts.org/api/v2
+- Auth: NONE — completely free, no account, no API key needed
+- Barcode endpoint: GET /product/{upc}.json
+- Returns: product name, brand, nutriments object with macros per 100g
+- Coverage: 4+ million products worldwide, crowd-sourced
+- Limitation: macro data may be missing on some entries — always handle gracefully
+
+## USDA FoodData Central — Text Search
+- Base URL: https://api.nal.usda.gov/fdc/v1
+- Auth: free API key from api.nal.usda.gov (add to Keychain as "usda_api_key")
+- Search endpoint: GET /foods/search?query={q}&pageSize=20&api_key={key}
+- Detail endpoint: GET /food/{fdcId}?api_key={key}
+- Returns: verified nutritional data, branded + generic foods, restaurant items
+- Limitation: serving size data can be inconsistent — normalize carefully
+
 =========================================================
-## PROMPT 3.1 — Nutritionix Service
+## PROMPT 3.1 — FoodResult Model & Service Layer
 =========================================================
 
 ---
-Create the Nutritionix API integration.
+Create the food database service layer.
 Place in Services/Nutrition/
 
 **Services/Nutrition/FoodResult.swift**
-A Swift struct (Codable) representing a food item returned from Nutritionix:
-- nixItemId: String?
-- foodName: String
-- brandName: String?
-- servingQty: Double
-- servingUnit: String
-- servingWeightGrams: Double?
-- calories: Double
-- protein: Double
-- totalCarbohydrate: Double (rename to carbs in local property)
-- totalFat: Double (rename to fat in local property)
-- thumbnail: URL? (optional food image)
+A unified Swift struct that normalizes food data from BOTH
+Open Food Facts AND USDA into one consistent format:
 
-Add a convenience init that creates a FoodEntry from a FoodResult with
-specified servingMultiplier, mealType, and confidence level.
+struct FoodResult {
+  var id: String               // OFF barcode OR USDA fdcId as string
+  var source: FoodSource       // enum: .openFoodFacts, .usda, .ai
+  var foodName: String
+  var brandName: String?
+  var servingQty: Double       // default 100 if not specified
+  var servingUnit: String      // default "g" if not specified
+  var caloriesPer100g: Double? // stored for recalculation at custom serving sizes
+  var calories: Double         // per serving
+  var protein: Double          // per serving grams
+  var carbs: Double            // per serving grams
+  var fat: Double              // per serving grams
+  var imageURL: URL?
+  var hasMissingMacros: Bool   // true if Claude had to fill gaps
 
-**Services/Nutrition/NutritionixService.swift**
-An @Observable class with methods:
+  func scaled(to grams: Double) -> FoodResult  // recalculate per custom serving
+}
 
-- func searchFood(query: String) async throws -> [FoodResult]
-  Calls GET /v2/search/instant?query={query}&self=false&branded=true&common=true
-  Maps response to [FoodResult]
+FoodDatabaseError enum:
+  .notFound        // barcode not in OFF database
+  .missingMacros   // product found but macro data incomplete (not thrown — handled gracefully)
+  .networkError(String)
+  .unauthorized    // USDA key invalid
 
-- func lookupBarcode(upc: String) async throws -> FoodResult?
-  Calls GET /v2/search/item?upc={upc}
-  Returns nil if not found (404) — caller MUST offer manual entry fallback, throws for other errors
+FoodSource enum: .openFoodFacts, .usda, .ai, .custom
 
-- func getNutritionDetails(for item: FoodResult) async throws -> FoodResult
-  Calls POST /v2/natural/nutrients for detailed breakdown
-  Only needed if initial search result is missing macro data
+**Services/Nutrition/OpenFoodFactsService.swift**
+@Observable class for barcode lookups.
 
-Auth: read App ID and App Key from KeychainManager using Keys.nutritionixAppId
-and Keys.nutritionixAppKey.
+func lookupBarcode(_ upc: String) async throws -> FoodResult?
 
-Error handling:
-- Create a NutritionixError enum: notFound, unauthorized, rateLimited, networkError(String)
-- Map HTTP status codes to these cases
-- 404 → .notFound  (caller should offer manual entry — not a hard error)
-- 401 → .unauthorized
-- 429 → .rateLimited
-- Other errors → .networkError with description
+Implementation:
+  1. GET https://world.openfoodfacts.org/api/v2/product/{upc}.json
+  2. Check response.status == 1 (found) — return nil if 0 (not found)
+  3. Parse product.nutriments:
+     energy-kcal_100g → calories per 100g  (NOT energy_100g which is kJ)
+     proteins_100g    → protein per 100g
+     carbohydrates_100g → carbs per 100g
+     fat_100g         → fat per 100g
+  4. Parse serving_size field if present (e.g. "30g") for default serving
+     If absent, default to 100g serving
+  5. If any macro field is nil/missing: set hasMissingMacros = true
+     Return the partial result — do NOT throw. Caller will use Claude to fill gaps.
+  6. Return nil for 404 or status 0 — not an error, just not found
 
-Use URLSession.shared for all networking (Swift's HttpClient equivalent).
-Decode responses with JSONDecoder — set keyDecodingStrategy = .convertFromSnakeCase
-so "serving_qty" in JSON maps to "servingQty" in Swift automatically.
+CRITICAL: Open Food Facts nutrition data is per 100g.
+Always convert to per-serving: value = (per100g / 100) * servingGrams
 
-For Java context: URLSession is Java's HttpClient. JSONDecoder is ObjectMapper.
-keyDecodingStrategy = .convertFromSnakeCase is like @JsonNaming(SnakeCaseStrategy.class).
+**Services/Nutrition/USDAService.swift**
+@Observable class for text search.
+
+func searchFood(_ query: String) async throws -> [FoodResult]
+func getFoodDetail(fdcId: Int) async throws -> FoodResult
+
+searchFood implementation:
+  1. Load USDA key from KeychainManager using Keys.usdaApiKey
+  2. GET /foods/search?query={query}&pageSize=20
+     &dataType=Branded,Survey(FNDDS)&api_key={key}
+  3. Map response.foods[] to [FoodResult]
+  4. Find nutrients by nutrientId within each food's foodNutrients array:
+     1008 = Energy (kcal) → calories
+     1003 = Protein (g)   → protein
+     1005 = Carbohydrate  → carbs
+     1004 = Total Fat (g) → fat
+  5. Use foodMeasures[0] for serving size if available
+     Otherwise default to 100g
+  6. Filter out results where calories == 0 (bad data guard)
+
+getFoodDetail: same nutrient parsing, single food by fdcId.
+Used when user taps a search result to get full serving size options.
+
+**Services/Nutrition/FoodDatabaseService.swift**
+Facade @Observable class combining both services + Claude fallback.
+
+var recentSearches: [String]  // last 5 queries, UserDefaults
+
+func searchFood(_ query: String) async throws -> [FoodResult]
+  → Calls USDAService.searchFood()
+
+func lookupBarcode(_ upc: String) async -> FoodResult?
+  → Calls OpenFoodFactsService.lookupBarcode()
+  → If result.hasMissingMacros: calls ClaudeAPIService.estimateMacros(for: result)
+  → Returns complete result (with .ai source on filled fields) or nil
+
+func estimateMacros(for partial: FoodResult) async -> FoodResult
+  → Passes product name + partial data to Claude
+  → Claude fills missing macro fields
+  → Sets hasMissingMacros = false, marks filled fields with .ai source
+  → Resulting FoodEntry confidence: .estimated (Claude filled gaps)
+
+Add Keys.usdaApiKey = "usda_api_key" to KeychainManager Keys enum.
+
+For Java context: This facade pattern is identical to Java — USDAService
+and OpenFoodFactsService are injected dependencies, FoodDatabaseService
+orchestrates them. The @Observable wrapper is like Spring's @Service
+with reactive property change notifications built in.
 ---
 
 =========================================================
-## PROMPT 3.2 — Barcode Scanner
+## PROMPT 3.2 — Barcode Scanner View
 =========================================================
 
 ---
-Create the barcode scanner view.
+Create the barcode scanner.
 Place in Views/FoodLog/BarcodeScannerView.swift
 
-Use DataScannerViewController (iOS 16+) wrapped in UIViewControllerRepresentable
-(the SwiftUI bridge for UIKit components — similar to wrapping a 
-Java Swing component in a JavaFX node).
+Use DataScannerViewController (iOS 16+) wrapped in UIViewControllerRepresentable.
 
-**Views/FoodLog/BarcodeScannerView.swift**
-A SwiftUI view that:
-1. Presents a full-screen camera view using DataScannerViewController
-2. Scans for barcode types: .ean8, .ean13, .upce, .code128
-3. When a barcode is detected, calls onBarcodeDetected(_ upc: String) callback
-4. Shows a scanning overlay: dark corners with a bright center rectangle
-5. Has a cancel button (X) in the top right
+The view is dumb — it only detects barcodes and reports them via callback.
+All API calls happen in the caller (BarcodeResultHandler).
 
-The DataScannerViewController configuration:
-- recognizedDataTypes: [.barcode(symbologies: [.ean8, .ean13, .upce, .code128])]
-- qualityLevel: .accurate
-- isHighlightingEnabled: true (highlights detected barcodes)
+Scan targets: .ean8, .ean13, .upce, .code128
+Config: qualityLevel = .accurate, isHighlightingEnabled = true
 
-NOTE: Barcode scanning requires a REAL DEVICE — it won't work in the simulator.
-For simulator testing, create a BarcodeScannerPreview that shows a text field
-where you can type a UPC manually. Use #if targetEnvironment(simulator) 
-preprocessor directive to switch between real scanner and preview mode.
+UI: full-screen camera, dark corner vignette overlay, bright center
+scan rectangle, X cancel button top right.
 
-For Java context: UIViewControllerRepresentable is like implementing 
-a SwingNode in JavaFX — it bridges the old UI framework (UIKit/Swing) 
-into the new one (SwiftUI/JavaFX).
+Simulator fallback (#if targetEnvironment(simulator)):
+Show a TextField + "Look Up" button so UPCs can be typed manually.
+Test UPC: 0049000028911 (Coca-Cola 12oz can)
+
+onBarcodeDetected(_ upc: String) callback — called once per scan,
+then scanning pauses until the result is handled.
 ---
 
 =========================================================
-## PROMPT 3.3 — Food Log Views
+## PROMPT 3.3 — Barcode Result Handler
 =========================================================
 
 ---
-Create the food logging UI views.
+Create the post-scan flow handler.
+Place in Views/FoodLog/BarcodeResultHandler.swift
+
+@Observable class BarcodeResultHandler:
+
+enum ScanState {
+  case idle
+  case loading
+  case found(FoodResult)           // complete macros
+  case foundPartial(FoodResult)    // Claude filled some gaps
+  case notFound                    // not in OFF database
+  case error(String)
+}
+
+var state: ScanState = .idle
+
+func handleBarcode(_ upc: String) async:
+  1. state = .loading
+  2. result = await FoodDatabaseService.lookupBarcode(upc)
+  3. if let result, !result.hasMissingMacros → state = .found(result)
+  4. if let result, result.hasMissingMacros → state = .foundPartial(result)
+  5. if nil → state = .notFound
+  6. on throw → state = .error(message)
+
+In the parent view, observe state and react:
+  .found / .foundPartial  → present ServingSizePickerView as sheet
+    .foundPartial shows a banner: "Some values were AI-estimated — adjust if needed"
+    FoodEntry created with .estimated confidence (not .precise)
+  .notFound → present ActionSheet:
+    "Search by name" → open FoodSearchView
+    "Enter manually" → open ManualFoodEntryView
+    NEVER show a dead-end error with no action
+  .error → show toast + offer manual entry fallback
+---
+
+=========================================================
+## PROMPT 3.4 — Food Search Views
+=========================================================
+
+---
+Create food search UI powered by USDA.
 Place in Views/FoodLog/
 
 **Views/FoodLog/FoodSearchView.swift**
-A sheet/modal view with:
-- Search bar at top (TextField bound to @State searchQuery)
-- As user types (with 0.3s debounce), calls NutritionixService.searchFood()
-- Results list with FoodResultRow for each item
-- Tap a result → show ServingSizePicker sheet
-- Loading state while searching
-- Empty state: "Start typing to search foods"
-- Error state: "Couldn't reach food database — check connection"
-- Empty results state: show "Not finding it? Add it manually" button
-  that opens ManualFoodEntryView — never show just a dead-end empty list
-- On any Nutritionix error, also show the manual entry fallback button
+Accepts mode: SearchMode (.logging or .ingredientPicker)
+
+Search bar with 0.4s debounce → calls FoodDatabaseService.searchFood()
+
+Results when query is non-empty — three sections:
+  1. "My Recipes" — CustomFoodLibrary.searchRecipes(query)
+  2. "My Foods" — CustomFoodLibrary.searchCustomFoods(query)
+  3. "Food Database" — USDA results
+
+Results when query is empty — Recently Used:
+  Last 5 custom foods + last 3 recipes (sorted by lastUsedAt)
+  This makes meal prep re-logging extremely fast
+
+Always at bottom of any state:
+  "+ Add food manually" → ManualFoodEntryView
+  "+ Build a recipe" → RecipeBuilderView
+
+Loading: ProgressView while USDA call in-flight
+Empty results: "No results — add it manually" button
+Error: "Couldn't reach food database" + manual entry button
+
+When user taps a USDA result:
+  Call USDAService.getFoodDetail(fdcId:) to load full serving options
+  Show ProgressView during this call
+  Then present ServingSizePickerView
 
 **Views/FoodLog/FoodResultRow.swift**
-A list row showing:
-- Food name (bold)
-- Brand name if available (gray, smaller)
-- Per-serving calories (right aligned)
-- Small thumbnail image if available (async loaded with AsyncImage)
+Row showing: food name (bold), brand (gray), source badge (USDA/Custom/Recipe), calories right-aligned.
 
 **Views/FoodLog/ServingSizePickerView.swift**
-A bottom sheet showing:
-- Food name as title
-- Macro breakdown: calories, protein, carbs, fat per serving
-- Serving quantity stepper (0.5 increments, default 1.0)
-- Serving unit label (e.g., "cup", "oz", "piece")
-- Meal type picker: Breakfast / Lunch / Dinner / Snack (segmented control)
-- "Log This Food" button → creates FoodEntry with .precise confidence, saves to SwiftData
-- Macros update in real time as serving quantity changes
+Bottom sheet:
+  Food name title
+  Macro breakdown (updates live as serving changes)
+  Serving quantity stepper (0.5 increments)
+  Serving unit selector (from USDA foodMeasures, or "g"/"oz"/"piece" fallback)
+  Meal type picker
+  "Log This Food" or "Add to Recipe" button depending on mode
+
+.logging mode → create FoodEntry, save to SwiftData, dismiss
+.ingredientPicker mode → call onIngredientSelected(RecipeIngredientDraft), dismiss
+---
+
+=========================================================
+## PROMPT 3.5 — Food Log View & Basic Dashboard
+=========================================================
+
+---
+Create the food log and dashboard views.
+Place in Views/FoodLog/ and Views/Dashboard/
 
 **Views/FoodLog/FoodLogView.swift**
-The main food log screen showing today's entries:
-- Header: today's date
-- MacroSummaryBar at top: shows calories/protein/carbs/fat logged vs target
-- List of entries grouped by MealType section
-- Each entry shows: name, confidence badge (subtle — only visible for .estimated), macros
-- Swipe left to delete an entry
-- Swipe right to copy to today (if viewing a past day)
-- FAB (floating action button) at bottom right with + icon
-- Tapping + shows an ActionSheet: "Scan Barcode" or "Search Food" 
-  (AI chat logger added in Phase 4)
----
-
-=========================================================
-## PROMPT 3.4 — Dashboard View (Basic Version)
-=========================================================
-
----
-Create the basic dashboard view (we'll enhance it after Phase 5 with
-learning engine data, but get the structure in place now).
-Place in Views/Dashboard/
+Main log screen:
+  Today's date header
+  MacroSummaryBar: logged vs target for cal/protein/carbs/fat
+  List grouped by MealType (.breakfast, .lunch, .dinner, .snack)
+  Each row: name, subtle .estimated badge if applicable, macros
+  Swipe left to delete
+  FAB (+) → ActionSheet:
+    "Scan Barcode"
+    "Search Foods"
+    "Tell AI" (Phase 4 — show as disabled/coming soon for now)
+    "My Recipes"
 
 **Views/Dashboard/MacroRingView.swift**
-A circular progress ring for a single macro:
-- Accepts: current Double, target Double, color: Color, label: String
-- Shows percentage filled as an arc
-- Center text shows current value (e.g., "142g" or "1,840")
-- Label below the ring (e.g., "Protein", "Calories")
-- Protein ring should be slightly larger than carb/fat rings to
-  emphasize its priority
+Circular arc progress ring.
+Params: current, target, color, label.
+Protein ring 15% larger than carb/fat rings.
 
 **Views/Dashboard/EffortBadgeView.swift**
-A small pill/badge showing today's effort level:
-- Different color per level: gray=rest, blue=low, green=moderate, orange=high, red=veryHigh
-- Shows icon + label: "🔥 High" or "😴 Rest"
+Pill badge: rest=gray, low=blue, moderate=green, high=orange, veryHigh=red
 
 **Views/Dashboard/DashboardView.swift**
-The home screen — should be glanceable in 3 seconds:
-- Top: greeting ("Good morning, [name]") + today's date
-- Large calorie ring in center (remaining calories, most prominent element)
-- Row of 3 smaller rings: Protein, Carbs, Fat
-- EffortBadge for today
-- Today's weight from HealthKit (if available)
-- Quick-add button: opens sheet with "Scan Barcode", "Search Food", "Tell AI" options
-- Recent entries: last 3 food log items with a "See All" link
-
-All data comes from @Query (SwiftData live queries) and @EnvironmentObject AppState.
-No business logic in the view body.
+Glanceable home — answers "how am I doing?" in under 3 seconds:
+  Greeting + date
+  Large calorie ring (remaining calories most prominent)
+  Row of 3 smaller rings: Protein, Carbs, Fat
+  EffortBadge
+  Weight from HealthKit if available
+  Quick-add button (same 4 options)
+  Last 3 food entries + "See All"
 ---
 
 =========================================================
 ## AFTER PHASE 3
 
-Checkpoint:
-✅ Can search for food by text and log it
-✅ Barcode scanner compiles (test on real device if available, or simulator text fallback)
-✅ Food log shows today's entries grouped by meal
-✅ Dashboard shows macro rings updating as food is logged
-✅ No API keys in source code
-✅ Nutritionix errors handled gracefully (no crashes)
+Checkpoints:
+✅ OFF barcode lookup works — test UPC 0049000028911 (Coca-Cola)
+✅ USDA text search returns results — test "chicken breast"
+✅ Missing OFF macros → Claude fills them, FoodEntry = .estimated
+✅ Barcode not found → ActionSheet with options, no dead end
+✅ Empty search → Recently Used section appears
+✅ Food log groups entries by meal correctly
+✅ Dashboard macro rings update after logging
+✅ No crashes on nil/partial API responses
 
-To test Nutritionix: go to developer.nutritionix.com, sign up free,
-get your App ID and App Key. Enter them in Settings screen (which we'll
-build properly in Phase 6, but temporarily hardcode in KeychainManager
-init for testing — REMOVE before any sharing/committing).
+Getting your free USDA key (takes 2 minutes):
+  1. Go to https://api.nal.usda.gov/api-guide
+  2. Click "Get an API Key" → enter email → key arrives instantly
+  3. Temporarily add to KeychainManager in AppEntry for testing:
+     KeychainManager.save(key: Keys.usdaApiKey, value: "YOUR_KEY_HERE")
+  4. Remove this line before committing — add via Settings screen later
 
-Next: Phase 4 — AI Conversational Logger
-
+Next: Phase 3.5 — Manual Food Entry & Custom Recipes
 
 =========================================================
 # PHASE 3.5 — Manual Food Entry & Custom Recipes
-# Build this immediately after Phase 3.
+# Build immediately after Phase 3.
 # These are V1 features, not optional extras.
 # =========================================================
 
@@ -219,76 +327,67 @@ Create the data models and service for user-created custom foods.
 Place models in Models/, service in Services/Nutrition/
 
 **Models/CustomFood.swift**
-SwiftData @Model class representing a user-created food:
-- id: UUID
-- name: String
-- brand: String? (optional — "My Kitchen", restaurant name, etc.)
-- caloriesPerServing: Double
-- proteinPerServing: Double
-- carbsPerServing: Double
-- fatPerServing: Double
-- servingSize: Double (numeric quantity)
-- servingUnit: String (e.g., "g", "oz", "cup", "piece")
-- createdAt: Date
-- lastUsedAt: Date? (update this every time user logs this food — for sorting)
-- useCount: Int (increment each log — for "frequently used" sorting)
-- source: CustomFoodSource enum:
-  .userCreated (typed in manually from scratch)
-  .aiAssisted (Claude prefilled it, user confirmed or edited)
+SwiftData @Model:
+  id: UUID
+  name: String
+  brand: String?
+  caloriesPerServing: Double
+  proteinPerServing: Double
+  carbsPerServing: Double
+  fatPerServing: Double
+  servingSize: Double
+  servingUnit: String
+  createdAt: Date
+  lastUsedAt: Date?
+  useCount: Int
+  source: CustomFoodSource enum (.userCreated, .aiAssisted)
 
 **Models/RecipeIngredient.swift**
-SwiftData @Model — a SNAPSHOT of one ingredient within a recipe:
-- id: UUID
-- name: String (snapshot — not a live reference)
-- quantity: Double
-- unit: String
-- calories: Double (snapshot at time recipe was saved)
-- protein: Double
-- carbs: Double
-- fat: Double
-- sourceType: String (nutritionix / customFood / recipe — for display only)
+SwiftData @Model — macro SNAPSHOT, not a live reference:
+  id: UUID
+  name: String
+  quantity: Double
+  unit: String
+  calories: Double   ← snapshot value at recipe-save time
+  protein: Double    ← snapshot
+  carbs: Double      ← snapshot
+  fat: Double        ← snapshot
+  sourceType: String (display only — "usda" / "openFoodFacts" / "custom" / "recipe")
 
 **Models/CustomRecipe.swift**
 SwiftData @Model:
-- id: UUID
-- name: String (e.g., "My Chicken Meal Prep", "Post-Workout Shake")
-- notes: String? (optional instructions or reminders)
-- ingredients: [RecipeIngredient] (snapshots — see rules above)
-- totalServings: Double (how many servings the full recipe makes, e.g., 6)
-- createdAt: Date
-- lastUsedAt: Date?
-- useCount: Int
-- isArchived: Bool (soft delete — don't hard delete recipes that have been logged)
+  id: UUID
+  name: String
+  notes: String?
+  ingredients: [RecipeIngredient] (cascade delete)
+  totalServings: Double
+  createdAt: Date
+  lastUsedAt: Date?
+  useCount: Int
+  isArchived: Bool (soft delete — NEVER hard delete logged recipes)
 
-Computed properties on CustomRecipe:
-- var totalCalories: Double (sum of all ingredient calories)
-- var totalProtein: Double
-- var totalCarbs: Double
-- var totalFat: Double
-- var caloriesPerServing: Double (totalCalories / totalServings)
-- var proteinPerServing: Double
-- var carbsPerServing: Double
-- var fatPerServing: Double
-- var macroSummary: String — e.g., "320 cal · 38g P · 28g C · 6g F per serving"
+Computed properties:
+  totalCalories, totalProtein, totalCarbs, totalFat
+  caloriesPerServing, proteinPerServing, carbsPerServing, fatPerServing
+  macroSummary: String → "320 cal · 38g P · 28g C · 6g F per serving"
 
 **Services/Nutrition/CustomFoodLibrary.swift**
-An @Observable class managing custom foods and recipes:
-- var recentCustomFoods: [CustomFood] (last 10 used, for quick access)
-- var recentRecipes: [CustomRecipe] (last 5 used)
+@Observable class:
+  recentCustomFoods: [CustomFood]  (last 10 by lastUsedAt)
+  recentRecipes: [CustomRecipe]    (last 5 by lastUsedAt)
 
-Methods:
-- func saveCustomFood(_ food: CustomFood, context: ModelContext)
-  Sets createdAt, saves to SwiftData
-- func saveRecipe(_ recipe: CustomRecipe, context: ModelContext)
-- func logCustomFood(_ food: CustomFood, servings: Double, mealType: MealType, context: ModelContext) -> FoodEntry
-  Creates FoodEntry with confidence .manual, increments food.useCount, updates lastUsedAt
-- func logRecipe(_ recipe: CustomRecipe, servings: Double, mealType: MealType, context: ModelContext) -> FoodEntry
-  Creates a single FoodEntry representing the recipe (not individual ingredients)
-  Confidence = .recipe. Name = recipe.name. Macros = per-serving macros × servings logged.
-- func searchCustomFoods(query: String) -> [CustomFood]
-  Simple case-insensitive name search across all saved custom foods
-- func searchRecipes(query: String) -> [CustomRecipe]
-  Case-insensitive search, excludes archived recipes
+  func saveCustomFood(_ food: CustomFood, context: ModelContext)
+  func saveRecipe(_ recipe: CustomRecipe, context: ModelContext)
+  func logCustomFood(_ food: CustomFood, servings: Double, mealType: MealType, context: ModelContext) -> FoodEntry
+    → confidence = .manual, increments useCount, updates lastUsedAt
+  func logRecipe(_ recipe: CustomRecipe, servings: Double, mealType: MealType, context: ModelContext) -> FoodEntry
+    → ONE FoodEntry for the whole recipe (not per ingredient)
+    → confidence = .recipe
+    → macros = perServing × servingsLogged
+  func searchCustomFoods(query: String) -> [CustomFood]
+  func searchRecipes(query: String) -> [CustomRecipe]  (excludes isArchived)
+  func unifiedSearch(query: String, databaseResults: [FoodResult]) -> UnifiedSearchResults
+    → merges recipes + custom foods + database results in priority order
 ---
 
 =========================================================
@@ -299,69 +398,58 @@ Methods:
 Create the manual food entry flow.
 Place in Views/FoodLibrary/ManualFoodEntryView.swift
 
-This view serves two purposes:
-1. Fallback when barcode/search fails
-2. Standalone entry from the food library
+Accepts optional prefillSuggestion: FoodResult? from AI or failed lookup.
 
-The view accepts an optional prefillSuggestion: FoodResult? parameter.
-When provided (from AI or Nutritionix fallback attempt), the form
-pre-populates with those values. When nil, form starts blank.
+Form fields:
+  Food Name* (required)
+  Brand/Source (optional — "My Kitchen", restaurant name)
+  Serving Size: [number] [unit picker: g/oz/ml/cup/tbsp/tsp/piece/serving]
+  Calories* (required)
+  Protein (g)*
+  Carbs (g)*
+  Fat (g)*
 
-**Layout:**
-- Title: "Add Food Manually" (or "Food Not Found — Add It" if coming from failed lookup)
-- If prefilled by AI: show a subtle banner "AI estimated these values — adjust if needed"
-  with confidence set to .estimated unless user edits any field (then .manual)
-- Form fields:
-  Food Name* (required, TextField)
-  Brand / Source (optional, TextField — e.g., "Whole Foods", "My Kitchen")
-  Serving Size: [number field] [unit picker: g / oz / ml / cup / tbsp / tsp / piece / serving]
-  Calories* (required, number field)
-  Protein (g)* (required)
-  Carbs (g)* (required)  
-  Fat (g)* (required)
-  
-- Live calorie check: show calculated calories from macros (P×4 + C×4 + F×9)
-  vs entered calories. If they differ by >10%: show yellow warning
-  "Macros add up to X cal — double check your numbers"
-  This helps catch typos without being annoying.
+Macro sanity check (live):
+  Calculate: (protein×4) + (carbs×4) + (fat×9)
+  If differs from entered calories by >10%:
+  Show yellow warning: "Macros add up to X cal — double check your numbers"
+  Do NOT block submission — just warn
 
-- Meal type picker (same as elsewhere)
+AI prefill banner:
+  If prefillSuggestion != nil: show subtle banner
+  "AI estimated these values — adjust if needed"
+  If user edits ANY field: confidence = .manual
+  If user logs without editing: confidence = .estimated
 
-- "Save to My Foods" toggle (default ON)
-  When ON: saves to CustomFoodLibrary for future reuse
-  When OFF: logs this one time only, not saved to library
+Save to Library toggle (default ON):
+  ON → saves as CustomFood for future reuse
+  OFF → one-time log only
 
-- "Log Food" button → creates FoodEntry, saves CustomFood if toggle on,
-  dismisses sheet
+Meal type picker
 
-- Confidence assigned:
-  .manual if user typed the values or edited AI prefill
-  .estimated if AI prefilled and user logged without changing anything
+"Log Food" button → FoodEntry saved, CustomFood saved if toggle ON
 
-For Java context: the live macro calculation is a computed property in
-the ViewModel, not in the View. The View observes it via @Observable.
+Confidence rules:
+  User typed from scratch → .manual
+  AI prefilled, user edited → .manual
+  AI prefilled, user logged unchanged → .estimated
 ---
 
 =========================================================
-## PROMPT 3.5C — AI Prefill for Manual Entry
+## PROMPT 3.5C — AI Macro Estimation for Manual Entry
 =========================================================
 
 ---
-Add AI-assisted prefill to ManualFoodEntryView.
-
-When ManualFoodEntryView is opened after a failed barcode lookup or
-empty search, and the user had typed a food name in the search bar,
-automatically attempt to prefill the form using Claude.
-
-Add this method to ClaudeAPIService.swift:
+Add estimateFoodNutrition to ClaudeAPIService.swift for manual entry prefill.
+Also used by FoodDatabaseService when OFF returns missing macros.
 
 func estimateFoodNutrition(foodDescription: String) async -> FoodResult?
 
 System prompt:
 """
-Estimate the nutrition for this food item and return ONLY valid JSON, no other text:
+Estimate nutrition for this food and return ONLY valid JSON, no other text:
 {
-  "food_name": "cleaned up food name",
+  "food_name": "cleaned food name",
   "serving_qty": 1,
   "serving_unit": "serving",
   "nf_calories": 0,
@@ -370,18 +458,19 @@ Estimate the nutrition for this food item and return ONLY valid JSON, no other t
   "nf_total_fat": 0,
   "confidence": "low|medium|high"
 }
-Use typical/average values for this food. If the food is too vague to estimate
-(e.g. just "food"), return null. Round all values to nearest whole number.
+Use typical average values. If too vague to estimate, return {"items": null}.
+Round all values to nearest whole number.
 """
 
-In ManualFoodEntryView:
-- Show a loading state "Looking up nutrition..." while Claude responds
-- If Claude returns a result, prefill the form and show the AI banner
-- If Claude returns null or errors, open blank form silently
-- The whole prefill attempt should take <2 seconds — if it takes longer,
-  open blank form and let prefill arrive asynchronously
+Timeout: 3 seconds. If Claude doesn't respond in time, return nil silently.
+Never throw to caller — return nil on any error.
+On nil: ManualFoodEntryView opens with blank form.
+On result: ManualFoodEntryView pre-fills and shows AI banner.
 
-This makes manual entry feel smart rather than tedious.
+Also add estimateMacros(for partial: FoodResult) async -> FoodResult:
+Used when OFF returns a product but macros are missing.
+Passes product name + available data to Claude to fill gaps.
+Returns the FoodResult with hasMissingMacros = false.
 ---
 
 =========================================================
@@ -389,127 +478,112 @@ This makes manual entry feel smart rather than tedious.
 =========================================================
 
 ---
-Create the recipe builder flow.
+Create recipe building flow.
 Place in Views/FoodLibrary/
 
 **Views/FoodLibrary/RecipeBuilderView.swift**
-Full-screen view for creating or editing a recipe.
+Full-screen view for creating/editing recipes.
 
-State: recipeName, notes, ingredients: [RecipeIngredientDraft], totalServings
+Local state (not SwiftData while building):
+  recipeName: String
+  notes: String
+  ingredients: [RecipeIngredientDraft]  ← local struct, not @Model
+  totalServings: Double (default 4)
 
-RecipeIngredientDraft is a local struct (not SwiftData) used while building:
-- name, quantity, unit, calories, protein, carbs, fat, sourceType
+RecipeIngredientDraft struct:
+  name, quantity, unit: String/Double
+  calories, protein, carbs, fat: Double
+  sourceType: String
 
-Header:
-- Recipe name text field (large, prominent)
-- Notes field (optional, small)
-- Servings stepper: "Makes [X] servings" (default 4)
+Header: recipe name TextField (large), notes TextField (small), servings stepper
 
-Ingredients section:
-- List of added ingredients showing name, quantity, and calories
-- Swipe to delete an ingredient
-- Reorder via drag handle (List with .onMove modifier)
-- "Add Ingredient" button at bottom of list
+Ingredients list:
+  Each row: name, quantity, calories
+  Swipe to delete
+  Drag handle to reorder (.onMove)
+  "Add Ingredient" button → opens FoodSearchView(.ingredientPicker mode)
+    When ingredient selected via callback → append to ingredients array
 
-"Add Ingredient" opens a sheet that reuses the EXISTING food search
-flow — same FoodSearchView from Phase 3, but in "ingredient picker" mode.
-When user selects a food and serving size, it adds a RecipeIngredientDraft
-to the list instead of logging a FoodEntry. This is controlled by a
-mode parameter on FoodSearchView: .logging vs .ingredientPicker
-
-Footer (sticky at bottom):
-- Live macro totals for entire recipe: "Total: X cal · Xg P · Xg C · Xg F"
-- Per serving totals: "Per serving: X cal · Xg P · Xg C · Xg F"
-- These update in real-time as ingredients are added/removed/edited
-- "Save Recipe" button — validates name is not empty and at least 1 ingredient
+Footer (sticky):
+  Total macro summary: "Total: X cal · Xg P · Xg C · Xg F"
+  Per serving: "Per serving: X cal · Xg P · Xg C · Xg F"
+  Both update live as ingredients change
+  "Save Recipe" button (validates: name not empty, 1+ ingredients)
 
 On save:
-1. Convert RecipeIngredientDraft list → [RecipeIngredient] SwiftData models (snapshots)
-2. Create CustomRecipe with those ingredients
-3. Save via CustomFoodLibrary.saveRecipe()
-4. Dismiss and navigate to RecipeDetailView
+  Convert [RecipeIngredientDraft] → [RecipeIngredient] SwiftData models
+  Each RecipeIngredient captures macro SNAPSHOT at this moment
+  Create CustomRecipe, call CustomFoodLibrary.saveRecipe()
+  Navigate to RecipeDetailView
+
+Edit mode:
+  Pre-populate from existing CustomRecipe
+  On save → create NEW CustomRecipe (new UUID, new createdAt)
+  Set old recipe.isArchived = true
+  NEVER mutate existing recipe — this protects historical log accuracy
 
 **Views/FoodLibrary/RecipeDetailView.swift**
-Read-only view of a saved recipe:
-- Recipe name (large)
-- Macro summary card: calories/protein/carbs/fat per serving + total
-- Servings selector (stepper) — defaults to 1
-- "Log This Recipe" button → calls CustomFoodLibrary.logRecipe() with selected servings
-- Ingredients list (read-only, shows all with quantities and cals)
-- Edit button (top right) → opens RecipeBuilderView in edit mode
-- Archive button (destructive, confirm dialog) → sets isArchived = true
-
-Edit mode behavior:
-- RecipeBuilderView pre-populates with existing recipe data
-- On save: creates a NEW CustomRecipe (does not mutate the existing one)
-  The old recipe stays in the database to preserve historical food log accuracy
-- The new recipe becomes the "active" version going forward
+Read-only recipe view:
+  Recipe name (large)
+  Macro summary card: per serving + total
+  Servings stepper (default 1, adjusts displayed macros live)
+  "Log This Recipe" → CustomFoodLibrary.logRecipe(servings: selected)
+  Ingredients list (read-only)
+  Edit button → RecipeBuilderView(editMode: recipe)
+  Archive button (confirm dialog) → recipe.isArchived = true
 
 **Views/FoodLibrary/CustomRecipeListView.swift**
-List of all saved recipes (non-archived):
-- Sorted by lastUsedAt descending (most recently used first)
-- Each row: recipe name, per-serving macro summary, last used date
-- Tap → RecipeDetailView
-- Swipe left → Archive (with undo option via .snackbar for 3 seconds)
-- Search bar at top filtering by name
-- "New Recipe" button → RecipeBuilderView (blank)
-- Empty state: "No recipes yet — build your first meal prep" + New Recipe button
+Browse all non-archived recipes:
+  Sorted by lastUsedAt desc
+  Search bar (filters by name)
+  Each row: name, macroSummary, last used date
+  Tap → RecipeDetailView
+  Swipe left → Archive (3-second undo snackbar)
+  "New Recipe" button → RecipeBuilderView (blank)
+  Empty state: "No recipes yet — build your first meal prep" + button
 ---
 
 =========================================================
-## PROMPT 3.5E — Integrate Into Food Log & Search
+## PROMPT 3.5E — Wire Into Existing Flow
 =========================================================
 
 ---
-Wire custom foods, recipes, and manual entry into the existing
-food logging flow so everything feels like one unified experience.
+Update existing views to integrate custom foods, recipes, and manual entry.
 
-**Updates to FoodSearchView:**
-The search results should now show THREE sections:
-1. "My Recipes" — CustomRecipe results (if any match)
-2. "My Foods" — CustomFood results (if any match)  
-3. "Foods Database" — Nutritionix results
+Updates to FoodSearchView (from Prompt 3.4):
+  Already has the three-section structure — verify CustomFoodLibrary
+  is being queried alongside USDA results.
+  Verify Recently Used appears when query is empty.
+  Verify "+ Add food manually" and "+ Build a recipe" always visible.
 
-When search query is empty (user just opened search):
-Show "Recently Used" section with last 5 custom foods + last 3 recipes
-This makes meal prep logging extremely fast — just open search and
-your chicken and rice is right there without typing anything.
+Updates to FoodLogView FAB (from Prompt 3.5):
+  Ensure "My Recipes" option opens CustomRecipeListView as a sheet.
 
-At the bottom of any search result (empty or not):
-Always show: "+ Add food manually" link → ManualFoodEntryView
-             "+ Build a recipe" link → RecipeBuilderView
+Updates to DashboardView quick-add:
+  Same 4 options as FoodLogView FAB.
 
-**Updates to FoodLogView:**
-The "+" FAB action sheet now has 4 options:
-- Scan Barcode
-- Search Foods
-- Tell AI (chat logger)
-- My Recipes (shortcut directly to CustomRecipeListView)
-
-**Updates to DashboardView quick-add:**
-Same 4 options as above.
+Add CustomFoodLibrary to AppState as an @Observable property
+so it's accessible throughout the app via @EnvironmentObject.
 ---
 
 =========================================================
 ## AFTER PHASE 3.5
 
-Checkpoint:
-✅ Barcode 404 → action sheet with options (not dead end)
-✅ Empty search → manual entry option always visible
-✅ Manual entry form pre-fills from AI when possible
+Checkpoints:
+✅ Barcode 404 → ActionSheet with options (not dead end)
+✅ Empty search → Recently Used section
+✅ Manual entry form AI prefills when possible
 ✅ Custom foods save to library and appear in future searches
-✅ Can build a recipe from multiple ingredients
+✅ Recipe builder works with ingredient search
 ✅ Recipe shows correct per-serving macros
-✅ Logging a recipe creates a single FoodEntry with .recipe confidence
-✅ Recently used foods/recipes appear at top of empty search
-✅ Editing a recipe creates a new version (old version preserved)
+✅ Logging recipe creates ONE FoodEntry with .recipe confidence
+✅ Editing recipe creates new version (old archived, not deleted)
 
-Test scenario — meal prep workflow:
-1. Build "Chicken Rice Meal Prep" recipe with 4 ingredients
-2. Set it to make 6 servings
-3. Log 2 servings for lunch
-4. Verify: 1 FoodEntry created with correct macros (2/6 of total)
-5. Open search tomorrow → recipe appears in Recently Used
-6. Log again in 2 taps
+Meal prep test:
+  1. Build "Chicken Rice Meal Prep" with 4 ingredients, 6 servings
+  2. Save recipe
+  3. Open search (empty query) → recipe appears in Recently Used
+  4. Log 2 servings → verify 1 FoodEntry with correct macros (2/6 of total)
+  5. Edit recipe → verify old recipe isArchived=true in SwiftData
 
-This workflow is the whole point of the feature.
+Next: Phase 4 — AI Conversational Logger

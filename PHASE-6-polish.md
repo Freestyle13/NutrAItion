@@ -115,8 +115,8 @@ Sections:
 - "How is this calculated?" info button → shows explanation sheet
 
 **API Keys**
-- Nutritionix App ID (masked, tap to edit)
-- Nutritionix App Key (masked, tap to edit)
+- USDA API Key (masked, tap to edit)
+- USDA API Key (masked, tap to edit)
 - Anthropic API Key (masked, tap to edit)
 - Each saves to Keychain on confirm
 - Test button for each: makes a simple API call to verify the key works

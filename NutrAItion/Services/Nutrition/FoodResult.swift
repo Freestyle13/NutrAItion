@@ -6,19 +6,27 @@
 import Foundation
 import SwiftData
 
-/// Food item returned from Nutritionix API. Codable for JSON decoding.
+/// Food search / barcode result (USDA, Open Food Facts, or AI-filled). Codable for JSON decoding where applicable.
 struct FoodResult: Codable {
+    struct ServingOption: Codable, Hashable {
+        var label: String
+        var grams: Double
+    }
+
     var nixItemId: String?
     var foodName: String
     var brandName: String?
     var servingQty: Double
     var servingUnit: String
     var servingWeightGrams: Double?
+    var servingOptions: [ServingOption] = []
     var calories: Double
     var protein: Double
     var totalCarbohydrate: Double
     var totalFat: Double
     var thumbnail: URL?
+    var hasMissingMacros: Bool = false
+    var source: FoodSource = .usda
 
     enum CodingKeys: String, CodingKey {
         case nixItemId = "nix_item_id"
@@ -27,11 +35,14 @@ struct FoodResult: Codable {
         case servingQty = "serving_qty"
         case servingUnit = "serving_unit"
         case servingWeightGrams = "serving_weight_grams"
+        case servingOptions = "serving_options"
         case calories = "nf_calories"
         case protein = "nf_protein"
         case totalCarbohydrate = "nf_total_carbohydrate"
         case totalFat = "nf_total_fat"
         case photo
+        case hasMissingMacros = "has_missing_macros"
+        case source
     }
 
     init(
@@ -41,11 +52,14 @@ struct FoodResult: Codable {
         servingQty: Double,
         servingUnit: String,
         servingWeightGrams: Double? = nil,
+        servingOptions: [ServingOption] = [],
         calories: Double,
         protein: Double,
         totalCarbohydrate: Double,
         totalFat: Double,
-        thumbnail: URL? = nil
+        thumbnail: URL? = nil,
+        hasMissingMacros: Bool = false,
+        source: FoodSource = .usda
     ) {
         self.nixItemId = nixItemId
         self.foodName = foodName
@@ -53,11 +67,14 @@ struct FoodResult: Codable {
         self.servingQty = servingQty
         self.servingUnit = servingUnit
         self.servingWeightGrams = servingWeightGrams
+        self.servingOptions = servingOptions
         self.calories = calories
         self.protein = protein
         self.totalCarbohydrate = totalCarbohydrate
         self.totalFat = totalFat
         self.thumbnail = thumbnail
+        self.hasMissingMacros = hasMissingMacros
+        self.source = source
     }
 
     init(from decoder: Decoder) throws {
@@ -68,10 +85,13 @@ struct FoodResult: Codable {
         servingQty = try c.decodeIfPresent(Double.self, forKey: .servingQty) ?? 1
         servingUnit = try c.decodeIfPresent(String.self, forKey: .servingUnit) ?? "serving"
         servingWeightGrams = try c.decodeIfPresent(Double.self, forKey: .servingWeightGrams)
+        servingOptions = try c.decodeIfPresent([ServingOption].self, forKey: .servingOptions) ?? []
         calories = try c.decodeIfPresent(Double.self, forKey: .calories) ?? 0
         protein = try c.decodeIfPresent(Double.self, forKey: .protein) ?? 0
         totalCarbohydrate = try c.decodeIfPresent(Double.self, forKey: .totalCarbohydrate) ?? 0
         totalFat = try c.decodeIfPresent(Double.self, forKey: .totalFat) ?? 0
+        hasMissingMacros = try c.decodeIfPresent(Bool.self, forKey: .hasMissingMacros) ?? false
+        source = try c.decodeIfPresent(FoodSource.self, forKey: .source) ?? .usda
         if c.contains(.photo) {
             let photo = try c.nestedContainer(keyedBy: PhotoKeys.self, forKey: .photo)
             thumbnail = try photo.decodeIfPresent(URL.self, forKey: .thumb)
@@ -88,10 +108,15 @@ struct FoodResult: Codable {
         try c.encode(servingQty, forKey: .servingQty)
         try c.encode(servingUnit, forKey: .servingUnit)
         try c.encodeIfPresent(servingWeightGrams, forKey: .servingWeightGrams)
+        if !servingOptions.isEmpty {
+            try c.encode(servingOptions, forKey: .servingOptions)
+        }
         try c.encode(calories, forKey: .calories)
         try c.encode(protein, forKey: .protein)
         try c.encode(totalCarbohydrate, forKey: .totalCarbohydrate)
         try c.encode(totalFat, forKey: .totalFat)
+        try c.encode(hasMissingMacros, forKey: .hasMissingMacros)
+        try c.encode(source, forKey: .source)
         if let thumbnail {
             var photo = c.nestedContainer(keyedBy: PhotoKeys.self, forKey: .photo)
             try photo.encode(thumbnail, forKey: .thumb)

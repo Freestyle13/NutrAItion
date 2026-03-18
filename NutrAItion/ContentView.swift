@@ -17,6 +17,8 @@ struct ContentView: View {
                 .tabItem { Label("Chat", systemImage: "message") }
             Text("Coming soon")
                 .tabItem { Label("Trends", systemImage: "chart.xyaxis.line") }
+            SettingsView()
+                .tabItem { Label("Settings", systemImage: "gearshape") }
         }
     }
 }

@@ -3,43 +3,84 @@
 # Copy these directly into your service classes.
 # =========================================================
 
-## NUTRITIONIX API
+## OPEN FOOD FACTS API (Barcode Lookup)
 
-Base URL: https://trackapi.nutritionix.com/v2
-Sign up: https://developer.nutritionix.com
+Base URL: https://world.openfoodfacts.org/api/v2
+Sign up: NOT REQUIRED — completely free and open, no account needed
 
-### Required Headers
-x-app-id: [your app id from Keychain]
-x-app-key: [your app key from Keychain]
-Content-Type: application/json
+### No Auth Headers Needed
+This API is fully public. No keys, no registration.
+
+### Endpoints
+
+**Barcode Lookup**
+GET /api/v2/product/{upc}.json
+
+Response check: response.status == 1 (found) or 0 (not found)
+Key fields:
+  product.product_name     → food name
+  product.brands           → brand
+  product.image_url        → food photo
+  product.serving_size     → serving string e.g. "30 g" or "1 cup"
+  product.nutriments:
+    energy-kcal_100g       → calories per 100g (NOT energy_100g which is kJ!)
+    proteins_100g          → protein per 100g
+    carbohydrates_100g     → carbs per 100g
+    fat_100g               → fat per 100g
+
+IMPORTANT: All macro values are per 100g. Convert to per-serving:
+  value = (per100g / 100.0) * servingGrams
+
+Test barcode: 0049000028911 (Coca-Cola 12oz can)
+
+### Handling Missing Macros
+OFF is crowd-sourced — macro fields may be nil on some products.
+Always check for nil. If missing: return partial result with
+hasMissingMacros = true, then call Claude to estimate the gaps.
+
+### Rate Limits
+No hard rate limits for reasonable personal/development use.
+
+---
+
+## USDA FOODDATA CENTRAL API (Text Search)
+
+Base URL: https://api.nal.usda.gov/fdc/v1
+Sign up: https://api.nal.usda.gov/api-guide (free key, instant email delivery)
+Key storage: KeychainManager using Keys.usdaApiKey
+
+### Authentication
+Pass as query parameter — no request headers needed:
+  ?api_key={your_key}
 
 ### Endpoints
 
 **Text Search**
-GET /v2/search/instant?query={query}&self=false&branded=true&common=true&detailed=true
-
-Response path to items: response.branded[] and response.common[]
-Key fields per item: food_name, brand_name, nf_calories, nf_protein,
-nf_total_carbohydrate, nf_total_fat, serving_qty, serving_unit,
-serving_weight_grams, photo.thumb
-
-**Barcode Lookup**
-GET /v2/search/item?upc={upc_string}
-
-Response path: response.foods[0]
-Same fields as above.
-Returns 404 if barcode not found — handle this as "not found", not an error.
-
-**Natural Language (backup)**
-POST /v2/natural/nutrients
-Body: { "query": "2 scrambled eggs and a slice of toast" }
+GET /fdc/v1/foods/search?query={q}&pageSize=20&dataType=Branded,Survey(FNDDS)&api_key={key}
 
 Response path: response.foods[]
-Use this as a fallback if Claude extraction is unavailable.
+Per food item:
+  fdcId: Int              → unique ID for detail lookup
+  description: String     → food name
+  brandOwner: String?     → brand name
+  servingSize: Double?
+  servingSizeUnit: String?
+  foodNutrients[]:        → find by nutrientId:
+    1008 = Energy (kcal)  → calories
+    1003 = Protein (g)    → protein
+    1005 = Carbohydrate   → carbs
+    1004 = Total Fat (g)  → fat
 
-### Rate Limits (Free Tier)
-500 API calls/day
-If you hit this: cache recent searches in memory for the session
+**Food Detail + Serving Options**
+GET /fdc/v1/food/{fdcId}?api_key={key}
+
+Additional field: foodMeasures[] → user-friendly serving options
+  disseminationText: String  → e.g. "1 cup", "1 tablespoon"
+  gramWeight: Double         → gram equivalent
+  Display in ServingSizePickerView for user to choose from
+
+### Rate Limits
+3,600 requests/hour on free tier — ample for personal use
 
 
 ---
@@ -188,16 +229,16 @@ regional breakdown regardless of exact label formatting.
 
 ## SWIFT CODE TEMPLATES
 
-### Making a Nutritionix API Call
+### Making an Open Food Facts Barcode Call
 
 ```swift
 func searchFood(query: String) async throws -> [FoodResult] {
-    guard let appId = KeychainManager.load(key: Keys.nutritionixAppId),
-          let appKey = KeychainManager.load(key: Keys.nutritionixAppKey) else {
-        throw NutritionixError.unauthorized
+    guard let appId = KeychainManager.load(key: Keys.usdaApiKey),
+          let appKey = KeychainManager.load(key: Keys.usdaApiKey) else {
+        throw FoodDatabaseError.unauthorized
     }
     
-    var components = URLComponents(string: "https://trackapi.nutritionix.com/v2/search/instant")!
+    var components = URLComponents(string: "https://api.nal.usda.gov/fdc/v1/v2/search/instant")!
     components.queryItems = [
         URLQueryItem(name: "query", value: query),
         URLQueryItem(name: "branded", value: "true"),
@@ -206,21 +247,21 @@ func searchFood(query: String) async throws -> [FoodResult] {
     ]
     
     var request = URLRequest(url: components.url!)
-    request.setValue(appId, forHTTPHeaderField: "x-app-id")
-    request.setValue(appKey, forHTTPHeaderField: "x-app-key")
+    // No auth headers — pass api_key as query param for USDA,
+    // or nothing at all for Open Food Facts
     
     let (data, response) = try await URLSession.shared.data(for: request)
     
     guard let httpResponse = response as? HTTPURLResponse else {
-        throw NutritionixError.networkError("Invalid response")
+        throw FoodDatabaseError.networkError("Invalid response")
     }
     
     switch httpResponse.statusCode {
     case 200: break
-    case 401: throw NutritionixError.unauthorized
+    case 401: throw FoodDatabaseError.unauthorized
     case 404: return []
-    case 429: throw NutritionixError.rateLimited
-    default: throw NutritionixError.networkError("Status \(httpResponse.statusCode)")
+    case 429: throw FoodDatabaseError.rateLimited
+    default: throw FoodDatabaseError.networkError("Status \(httpResponse.statusCode)")
     }
     
     let decoder = JSONDecoder()

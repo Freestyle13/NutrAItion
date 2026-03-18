@@ -20,7 +20,7 @@ moving to the next prompt.
 |------|---------|
 | PHASE-1-setup.md | Xcode project, data models, HealthKit, Keychain |
 | PHASE-2-engine.md | Effort scorer, weight smoother, macro calculator + tests |
-| PHASE-3-nutrition.md | Nutritionix API, barcode scanner, food log UI, manual entry, custom recipes |
+| PHASE-3-nutrition.md | Open Food Facts (barcode) + USDA (search), food log UI, manual entry, custom recipes |
 | PHASE-4-5-ai-engine.md | Claude API, chat logger, adaptive TDEE engine |
 | PHASE-6-polish.md | Trends view, onboarding, settings, TestFlight |
 
@@ -34,8 +34,9 @@ data, malformed API responses, debugging the learning engine.
 |-------|------|-------------|
 | 1 | ~8 hrs | Compilable project, data models, HealthKit connected |
 | 2 | ~6 hrs | All engine logic written and tested |
-| 3 | ~8 hrs | Working food logger (barcode + search) |
+| 3 | ~8 hrs | Working food logger — Open Food Facts barcode + USDA text search |
 | 3.5 | ~8 hrs | Manual entry, AI prefill, custom recipes, meal prep logging |
+| 3.6 | ~3 hrs | **Existing code only** — refactor Nutritionix → OFF + USDA |
 | 4-5 | ~12 hrs | AI chat logger + adaptive learning engine |
 | 6 | ~8 hrs | Polished app ready for TestFlight |
 | **Total** | **~50 hrs** | **V1 on TestFlight** |

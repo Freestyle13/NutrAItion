@@ -65,7 +65,6 @@ enum KeychainManager {
 // MARK: - Key names for API credentials (use with KeychainManager.save/load/delete)
 
 enum Keys {
-    static let nutritionixAppId = "nutritionix_app_id"
-    static let nutritionixAppKey = "nutritionix_app_key"
+    static let usdaApiKey = "usda_api_key"
     static let anthropicApiKey = "anthropic_api_key"
 }

@@ -46,7 +46,7 @@ Someone with a clinical eating disorder (not our use case to serve).
 
 ### 1. Structured Food Logging
 - Barcode scanner (precise, confidence: .precise)
-- Text search via Nutritionix (precise, confidence: .precise)
+- Text search via USDA FoodData Central (precise, confidence: .precise)
 - Manual entry when database has no result (confidence: .manual) — never dead-end the user
 - AI-assisted prefill on manual entry — Claude estimates macros so form is not blank
 - Custom foods saved to personal library for reuse
@@ -59,7 +59,7 @@ Someone with a clinical eating disorder (not our use case to serve).
 - Does NOT replace structured logging — supplements it
 
 ### 3. Custom Recipes
-- Build multi-ingredient recipes from any food source (Nutritionix, custom foods, other recipes)
+- Build multi-ingredient recipes from any food source (USDA, Open Food Facts, custom foods, other recipes)
 - Set total servings — scale macros automatically when logging partial servings
 - Built for meal prep: log 2 of 6 servings of your weekly chicken rice in 2 taps
 - Recently used recipes surface at top of search — minimal friction for repeat meals

@@ -146,9 +146,9 @@ never throw or crash.
 
 Also create a Keys enum nested inside or alongside with static string
 constants for all key names we'll use:
-- Keys.nutritionixAppId = "nutritionix_app_id"
-- Keys.nutritionixAppKey = "nutritionix_app_key"  
+- Keys.usdaApiKey = "usda_api_key"
 - Keys.anthropicApiKey = "anthropic_api_key"
+(No key needed for Open Food Facts — it is fully public)
 
 For Java context: iOS Keychain is the equivalent of Java KeyStore —
 hardware-backed secure credential storage. Never store API keys in

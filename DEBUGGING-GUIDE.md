@@ -76,22 +76,28 @@ to see where the calculation diverges from expectation.
 
 ## PHASE 3 — NUTRITION LOGGING
 
-**Problem: Nutritionix returns 401 Unauthorized**
+**Problem: USDA returns 401 Unauthorized**
 Fix: API keys not being sent correctly. Verify:
 - Keys are stored in Keychain correctly (test with KeychainManager.load())
-- Headers are "x-app-id" and "x-app-key" (not "Authorization: Bearer")
+- Key is passed as ?api_key= query param (NOT a header)
+- Verify key stored in Keychain under Keys.usdaApiKey
 - Keys don't have leading/trailing whitespace when saved
 
-**Problem: Nutritionix returns 404 for barcode**
-This is normal — not every product is in their database.
-Make sure your code handles nil return gracefully:
-Show "Product not found — try searching by name" message, don't crash.
+**Problem: Open Food Facts returns status 0 (barcode not found)**
+This is normal — not every barcode is in their database.
+Do NOT dead-end the user — BarcodeResultHandler.state = .notFound
+should show an ActionSheet: "Search by name" or "Enter manually".
+Never show a plain "not found" with no action path.
 
-**Problem: JSONDecoder fails to parse Nutritionix response**
-Fix: Print the raw response string before decoding to see what
-the actual JSON looks like. Often the field names differ slightly.
-Use keyDecodingStrategy = .convertFromSnakeCase for snake_case fields.
-Add CodingKeys enum to handle any remaining mismatches.
+**Problem: JSONDecoder fails to parse Open Food Facts nutriments**
+OFF uses hyphens in field names like "energy-kcal_100g".
+keyDecodingStrategy = .convertFromSnakeCase does NOT handle hyphens.
+Fix: use a CodingKeys enum with explicit string keys for the
+nutriments struct, e.g. case caloriesPer100g = "energy-kcal_100g".
+
+**Problem: OFF macros look 8-10x too large**
+You are reading energy_100g (kilojoules) not energy-kcal_100g (calories).
+Always use the field named exactly "energy-kcal_100g".
 
 **Problem: SwiftUI list not updating after saving FoodEntry**
 Fix: Make sure you're saving to the modelContext correctly:
@@ -260,7 +266,7 @@ Never call modelContext.insert on the existing recipe with changed values.
 
 **Problem: Custom foods not appearing in search results**
 Fix: Verify CustomFoodLibrary.searchCustomFoods() is being called
-alongside NutritionixService.searchFood() and both results are
+alongside FoodDatabaseService.searchFood() and both results are
 being merged into the same list. Check the search is case-insensitive:
 use .localizedCaseInsensitiveContains() not == for string matching.
 

@@ -13,27 +13,61 @@ struct ServingSizePickerView: View {
 
     @Environment(\.modelContext) private var modelContext
     @State private var servingMultiplier: Double = 1.0
+    @State private var selectedServingOptionIndex: Int = 0
     @State private var selectedMealType: MealType = .lunch
 
-    private var scaledCalories: Double { food.calories * servingMultiplier }
-    private var scaledProtein: Double { food.protein * servingMultiplier }
-    private var scaledCarbs: Double { food.totalCarbohydrate * servingMultiplier }
-    private var scaledFat: Double { food.totalFat * servingMultiplier }
+    private var baseServingGrams: Double { food.servingWeightGrams ?? 100.0 }
+
+    private var availableServingOptions: [FoodResult.ServingOption] {
+        if food.servingOptions.isEmpty {
+            let grams = baseServingGrams
+            return [FoodResult.ServingOption(label: "\(Int(grams)) g", grams: grams)]
+        }
+        return food.servingOptions
+    }
+
+    private var selectedServingOption: FoodResult.ServingOption {
+        let idx = min(max(selectedServingOptionIndex, 0), availableServingOptions.count - 1)
+        return availableServingOptions[idx]
+    }
+
+    /// Ratio between the selected serving grams and the grams used to compute `food.calories`.
+    private var gramsRatio: Double {
+        guard baseServingGrams > 0 else { return 1.0 }
+        return selectedServingOption.grams / baseServingGrams
+    }
+
+    private var caloriesPerSelectedServing: Double { food.calories * gramsRatio }
+    private var proteinPerSelectedServing: Double { food.protein * gramsRatio }
+    private var carbsPerSelectedServing: Double { food.totalCarbohydrate * gramsRatio }
+    private var fatPerSelectedServing: Double { food.totalFat * gramsRatio }
+
+    private var scaledCalories: Double { caloriesPerSelectedServing * servingMultiplier }
+    private var scaledProtein: Double { proteinPerSelectedServing * servingMultiplier }
+    private var scaledCarbs: Double { carbsPerSelectedServing * servingMultiplier }
+    private var scaledFat: Double { fatPerSelectedServing * servingMultiplier }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Macros per serving") {
-                    LabeledContent("Calories", value: "\(Int(food.calories.rounded()))")
-                    LabeledContent("Protein", value: "\(Int(food.protein.rounded())) g")
-                    LabeledContent("Carbs", value: "\(Int(food.totalCarbohydrate.rounded())) g")
-                    LabeledContent("Fat", value: "\(Int(food.totalFat.rounded())) g")
+                    LabeledContent("Calories", value: "\(Int(caloriesPerSelectedServing.rounded()))")
+                    LabeledContent("Protein", value: "\(Int(proteinPerSelectedServing.rounded())) g")
+                    LabeledContent("Carbs", value: "\(Int(carbsPerSelectedServing.rounded())) g")
+                    LabeledContent("Fat", value: "\(Int(fatPerSelectedServing.rounded())) g")
                 }
                 Section {
+                    if availableServingOptions.count > 1 {
+                        Picker("Serving size", selection: $selectedServingOptionIndex) {
+                            ForEach(availableServingOptions.indices, id: \.self) { idx in
+                                Text(availableServingOptions[idx].label).tag(idx)
+                            }
+                        }
+                    }
                     Stepper(value: $servingMultiplier, in: 0.5...20, step: 0.5) {
                         Text("Servings: \(servingMultiplier, specifier: "%.1f")")
                     }
-                    Text("Unit: \(food.servingUnit)")
+                    Text("Serving: \(selectedServingOption.label)")
                         .foregroundStyle(.secondary)
                 }
                 Section("Meal") {
@@ -65,14 +99,20 @@ struct ServingSizePickerView: View {
                     Button("Cancel") { onDismiss() }
                 }
             }
+            .onAppear {
+                selectedServingOptionIndex = 0
+            }
         }
     }
 
     private func logFood() {
+        // Adjust multiplier so the entry scales to the selected serving size.
+        let adjustedMultiplier = servingMultiplier * gramsRatio
+        let confidence: Confidence = (food.source == .ai) ? .estimated : .precise
         let entry = food.toFoodEntry(
-            servingMultiplier: servingMultiplier,
+            servingMultiplier: adjustedMultiplier,
             mealType: selectedMealType,
-            confidence: .precise
+            confidence: confidence
         )
         modelContext.insert(entry)
         try? modelContext.save()

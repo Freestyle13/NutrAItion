@@ -7,6 +7,7 @@ import SwiftUI
 
 struct FoodSearchView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppState.self) private var appState
     @State private var searchQuery = ""
     @State private var results: [FoodResult] = []
     @State private var isLoading = false
@@ -14,7 +15,6 @@ struct FoodSearchView: View {
     @State private var selectedFood: FoodResult?
     @State private var showManualEntry = false
 
-    private let nutritionix = NutritionixService()
     private let debounceSeconds: Double = 0.3
 
     var body: some View {
@@ -103,13 +103,13 @@ struct FoodSearchView: View {
         errorMessage = nil
         defer { isLoading = false }
         do {
-            results = try await nutritionix.searchFood(query: query)
-        } catch NutritionixError.notFound {
+            results = try await appState.foodDatabaseService.searchFood(query)
+        } catch FoodDatabaseError.notFound {
             results = []
-        } catch NutritionixError.unauthorized {
+        } catch FoodDatabaseError.unauthorized {
             errorMessage = "Couldn't reach food database — check connection"
             results = []
-        } catch NutritionixError.rateLimited {
+        } catch FoodDatabaseError.rateLimited {
             errorMessage = "Too many requests — try again in a moment"
             results = []
         } catch {
@@ -126,4 +126,5 @@ extension FoodResult: Identifiable {
 
 #Preview {
     FoodSearchView()
+        .environment(AppState())
 }

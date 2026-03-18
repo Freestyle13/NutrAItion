@@ -6,7 +6,7 @@
 import Foundation
 
 enum Confidence: String, CaseIterable, Codable {
-    case precise   // barcode scan, Nutritionix text search
+    case precise   // barcode scan, USDA / verified database search
     case estimated // AI chat logging, AI-prefilled suggestion
 
     var displayName: String {

@@ -14,6 +14,8 @@ final class AppState {
     /// Set when today's DayLog/effort is computed (Phase 4+). Nil = show placeholder in dashboard.
     var todaysEffortLevel: EffortLevel?
 
+    let foodDatabaseService = FoodDatabaseService()
+
     var isOnboardingComplete: Bool { userProfile != nil }
 
     /// Loads the singleton UserProfile from SwiftData (there should be at most one).
