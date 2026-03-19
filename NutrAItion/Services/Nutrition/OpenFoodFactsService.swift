@@ -7,11 +7,9 @@ enum OpenFoodFactsError: Error {
     case missingProduct
 }
 
-@Observable
 final class OpenFoodFactsService {
     private let baseURL = "https://world.openfoodfacts.org/api/v2/product"
     private let session = URLSession.shared
-    private let decoder: JSONDecoder = JSONDecoder()
 
     func lookupBarcode(_ upc: String) async throws -> FoodResult? {
         guard let encoded = upc.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
@@ -29,11 +27,12 @@ final class OpenFoodFactsService {
             throw OpenFoodFactsError.invalidResponse
         }
 
-        return try parseBarcodeResponse(from: data)
+        return try Self.parseBarcodeResponse(from: data)
     }
 
-    /// Exposed for unit tests.
-    internal func parseBarcodeResponse(from data: Data) throws -> FoodResult? {
+    /// Pure parse — safe for unit tests (no network, no Observation).
+    static func parseBarcodeResponse(from data: Data) throws -> FoodResult? {
+        let decoder = JSONDecoder()
         let wrapper: OFFProductResponse
         do {
             wrapper = try decoder.decode(OFFProductResponse.self, from: data)
@@ -52,10 +51,13 @@ final class OpenFoodFactsService {
         let servingLabel = product.servingSize ?? "\(Int(servingGrams)) g"
 
         let nutriments = product.nutriments
-        let caloriesPer100g = nutriments?.energyKcal100g.value
-        let proteinPer100g = nutriments?.proteins100g.value
-        let carbsPer100g = nutriments?.carbohydrates100g.value
-        let fatPer100g = nutriments?.fat100g.value
+        func per100g(_ field: FlexibleDouble?) -> Double? {
+            field?.value
+        }
+        let caloriesPer100g = nutriments.flatMap { per100g($0.energyKcal100g) }
+        let proteinPer100g = nutriments.flatMap { per100g($0.proteins100g) }
+        let carbsPer100g = nutriments.flatMap { per100g($0.carbohydrates100g) }
+        let fatPer100g = nutriments.flatMap { per100g($0.fat100g) }
 
         let hasMissingMacros = [
             caloriesPer100g,
@@ -89,11 +91,9 @@ final class OpenFoodFactsService {
         )
     }
 
-    private func parseServingGrams(from servingSize: String?) -> Double? {
+    private static func parseServingGrams(from servingSize: String?) -> Double? {
         guard let servingSize else { return nil }
 
-        // Extract the number directly before a `g` (e.g. "30 g", "100g").
-        // If it doesn't match, fall back to default 100g.
         let pattern = #"([0-9]+(?:\.[0-9]+)?)\s*g\b"#
         guard let match = servingSize.range(of: pattern, options: .regularExpression) else {
             return nil
@@ -165,4 +165,3 @@ private struct FlexibleDouble: Decodable {
         value = nil
     }
 }
-

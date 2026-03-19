@@ -58,9 +58,10 @@ final class USDAService {
             throw USDAServiceError.decodingFailed
         }
 
-        let results: [FoodResult] = (wrapper.foods ?? []).compactMap { food in
-            guard let calories = foodMacro(food.foodNutrients, nutrientId: 1008) else { return nil }
-            if calories == 0 { return nil }
+        let results: [FoodResult] = (wrapper.foods ?? []).compactMap { food -> FoodResult? in
+            guard let calories = foodMacro(food.foodNutrients, nutrientId: 1008), calories != 0 else {
+                return nil
+            }
 
             let protein = foodMacro(food.foodNutrients, nutrientId: 1003) ?? 0
             let carbs = foodMacro(food.foodNutrients, nutrientId: 1005) ?? 0
@@ -75,7 +76,7 @@ final class USDAService {
 
             let servingSize = food.servingSize ?? 100.0
             let servingUnit = food.servingSizeUnit ?? "g"
-            let servingLabel = "\(servingSize, specifier: "%.0f") \(servingUnit)"
+            let servingLabel = String(format: "%.0f %@", servingSize, servingUnit)
 
             return FoodResult(
                 nixItemId: nil,
@@ -160,7 +161,7 @@ final class USDAService {
 
         let finalServingOptions: [FoodResult.ServingOption]
         if servingOptions.isEmpty {
-            finalServingOptions = [FoodResult.ServingOption(label: "\(servingSize, specifier: "%.0f") \(servingUnit)", grams: servingSize)]
+            finalServingOptions = [FoodResult.ServingOption(label: String(format: "%.0f %@", servingSize, servingUnit), grams: servingSize)]
         } else {
             finalServingOptions = servingOptions
         }

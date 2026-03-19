@@ -22,9 +22,8 @@ final class OpenFoodFactsServiceTests: XCTestCase {
         """
 
         let data = Data(json.utf8)
-        let service = OpenFoodFactsService()
-
-        let result = try service.parseBarcodeResponse(from: data)
+        // Use static parser — avoids @Observable / Observation in test process (can SIGABRT).
+        let result = try OpenFoodFactsService.parseBarcodeResponse(from: data)
         XCTAssertNotNil(result)
 
         guard let food = result else { return }
@@ -33,7 +32,11 @@ final class OpenFoodFactsServiceTests: XCTestCase {
         XCTAssertEqual(food.totalCarbohydrate, 9.0, accuracy: 0.0001)
         XCTAssertEqual(food.totalFat, 1.5, accuracy: 0.0001)
 
-        XCTAssertEqual(food.servingWeightGrams, 30.0, accuracy: 0.0001)
+        guard let servingGrams = food.servingWeightGrams else {
+            XCTFail("servingWeightGrams should be set for parsed serving_size")
+            return
+        }
+        XCTAssertEqual(servingGrams, 30.0, accuracy: 0.0001)
         XCTAssertEqual(food.hasMissingMacros, false)
         XCTAssertEqual(food.source, .openFoodFacts)
     }
