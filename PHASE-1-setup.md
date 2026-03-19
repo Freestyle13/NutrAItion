@@ -32,7 +32,7 @@ SwiftData @Model class with:
 - protein: Double
 - carbs: Double
 - fat: Double
-- confidence: Confidence enum (.precise or .estimated)
+- confidence: Confidence enum (.precise, .manual, or .estimated)
 - mealType: MealType enum (.breakfast, .lunch, .dinner, .snack)
 - timestamp: Date (default Date())
 - notes: String? (optional, for chat-logged context)

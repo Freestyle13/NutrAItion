@@ -59,7 +59,7 @@ their true metabolism. It gets smarter the longer someone uses it.
 - .manual: user-entered macros via manual food entry form (self-reported, intentional)
 - .recipe: logged from a saved custom recipe (composite of its ingredient confidence levels)
 - .estimated: Claude AI chat logging, AI-prefilled suggestion that user did not correct
-- Learning engine weights: .precise = 1.0x, .manual = 0.9x, .recipe = 0.85x, .estimated = 0.7x
+- Learning engine weights: .precise = 1.0x, .manual = 1.0x, .recipe = 0.85x, .estimated = 0.7x
 - Always tag entries at creation — never infer or change confidence after the fact
 - When barcode returns 404 or search returns empty results, ALWAYS offer manual entry — never dead-end the user
 

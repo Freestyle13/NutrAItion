@@ -52,47 +52,59 @@ struct FoodLogView: View {
                         targetCalories: targets.calories,
                         targetProtein: targets.protein,
                         targetCarbs: targets.carbs,
-                        targetFat: targets.fat
+                        targetFat: targets.fat,
+                        justLogged: appState.justLoggedFoodEntry
                     )
-                    .padding(.horizontal)
+                    .padding(.horizontal, .screenPadding)
+                    .padding(.top, 12)
                 }
                 List {
                     ForEach(groupedByMeal, id: \.0) { mealType, entries in
-                        Section(mealType.displayName) {
+                        Section {
                             ForEach(entries, id: \.id) { entry in
-                                FoodLogEntryRow(entry: entry)
-                                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                        Button(role: .destructive) {
-                                            deleteEntry(entry)
-                                        } label: {
-                                            Label("Delete", systemImage: "trash")
-                                        }
+                                FoodLogEntryRow(
+                                    entry: entry,
+                                    canCopyToToday: !isViewingToday
+                                ) {
+                                    copyToToday(entry)
+                                }
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button(role: .destructive) {
+                                        deleteEntry(entry)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
                                     }
-                                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                        if !isViewingToday {
-                                            Button {
-                                                copyToToday(entry)
-                                            } label: {
-                                                Label("Copy to today", systemImage: "doc.on.doc")
-                                            }
-                                        }
-                                    }
+                                }
                             }
+                        } header: {
+                            mealSectionHeader(mealType: mealType, entries: entries)
                         }
                     }
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .padding(.bottom, 84)
             }
             .navigationTitle(formattedDate(selectedDate))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showAddActions = true
-                    } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.title2)
+            .background(Color.appBackground)
+            .overlay(alignment: .bottomTrailing) {
+                Button {
+                    showAddActions = true
+                } label: {
+                    ZStack {
+                        Circle()
+                            .fill(Color.accentPurple)
+                            .frame(width: 52, height: 52)
+                        Image(systemName: "plus")
+                            .font(.system(size: 22, weight: .medium))
+                            .foregroundStyle(Color.textPrimary)
+                            .frame(width: 22, height: 22)
                     }
                 }
+                .padding(.trailing, 20)
+                .padding(.bottom, 20)
+                .buttonStyle(AccentPressableButtonStyle())
             }
             .confirmationDialog("Add food", isPresented: $showAddActions) {
                 Button("Scan Barcode") {
@@ -117,6 +129,8 @@ struct FoodLogView: View {
             }
             .sheet(isPresented: $showFoodSearch) {
                 FoodSearchView()
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
             }
         }
     }
@@ -144,7 +158,34 @@ struct FoodLogView: View {
             timestamp: Date()
         )
         modelContext.insert(copy)
+        if let profile = appState.userProfile {
+            let synchronizer = DayLogSynchronizer(
+                healthKitManager: appState.healthKitManager,
+                calendar: Calendar.current
+            )
+            synchronizer.attachFoodEntryToDayLog(copy, modelContext: modelContext, userProfile: profile)
+        }
         try? modelContext.save()
+        // Pulse the summary bar to confirm a new entry was added.
+        appState.triggerJustLoggedAnimation()
+    }
+
+    private func mealSectionHeader(mealType: MealType, entries: [FoodEntry]) -> some View {
+        let totalCalories = entries.reduce(0.0) { $0 + $1.calories }
+        return HStack {
+            Text(mealType.displayName.uppercased())
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.88) // 0.08em for a ~11pt font
+                .foregroundStyle(Color.textMuted)
+
+            Spacer()
+
+            Text("\(Int(totalCalories.rounded())) cal")
+                .font(Font.entryMeta)
+                .foregroundStyle(Color.textDim)
+        }
+        .padding(.horizontal, .screenPadding)
+        .padding(.vertical, 6)
     }
 }
 
@@ -152,26 +193,135 @@ struct FoodLogView: View {
 
 private struct FoodLogEntryRow: View {
     let entry: FoodEntry
+    let canCopyToToday: Bool
+    let onCopyToToday: () -> Void
+
+    init(
+        entry: FoodEntry,
+        canCopyToToday: Bool,
+        onCopyToToday: @escaping () -> Void
+    ) {
+        self.entry = entry
+        self.canCopyToToday = canCopyToToday
+        self.onCopyToToday = onCopyToToday
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
+        HStack(alignment: .top, spacing: 12) {
+            RoundedRectangle(cornerRadius: .radiusSmall)
+                .fill(iconBackground)
+                .frame(width: 36, height: 36)
+                .overlay {
+                    Image(systemName: "fork.knife")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.textPrimary)
+                }
+
+            VStack(alignment: .leading, spacing: 6) {
                 Text(entry.name)
-                    .font(.headline)
-                if entry.confidence == .estimated {
-                    Text("Est.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.quaternary, in: Capsule())
+                    .font(Font.entryName)
+                    .foregroundStyle(Color.textPrimary)
+                    .lineLimit(1)
+
+                Text(formattedTime(entry.timestamp))
+                    .font(Font.entryMeta)
+                    .foregroundStyle(Color.textDim)
+
+                HStack(spacing: 6) {
+                    if entry.confidence == .estimated {
+                        badgeAI
+                    } else if entry.confidence == .manual {
+                        badgeManual
+                    } else {
+                        badgeRecipe
+                    }
+                }
+
+                Text(macroString)
+                    .font(Font.entryMeta)
+                    .foregroundStyle(Color.textDim)
+            }
+
+            Spacer()
+
+            Text("\(Int(entry.calories.rounded())) cal")
+                .font(Font.cardValue)
+                .foregroundStyle(Color.textPrimary)
+        }
+        .padding(.horizontal, .cardPaddingH)
+        .padding(.vertical, .cardPaddingV)
+        .background(Color.cardBackground)
+        .overlay(
+            RoundedRectangle(cornerRadius: .radiusCard)
+                .stroke(Color.cardBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: .radiusCard))
+        .contextMenu {
+            if canCopyToToday {
+                Button("Copy to today") {
+                    onCopyToToday()
                 }
             }
-            Text("\(Int(entry.calories.rounded())) cal · P \(Int(entry.protein.rounded()))g · C \(Int(entry.carbs.rounded()))g · F \(Int(entry.fat.rounded()))g")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 2)
+    }
+
+    private var iconBackground: Color {
+        entry.confidence == .estimated ? .iconBgOrange : .iconBgPurple
+    }
+
+    private var macroString: String {
+        let p = Int(entry.protein.rounded())
+        let c = Int(entry.carbs.rounded())
+        let f = Int(entry.fat.rounded())
+        return "\(p)p · \(c)c · \(f)f"
+    }
+
+    private func formattedTime(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        return f.string(from: date)
+    }
+
+    private var badgeAI: some View {
+        Text("AI EST.")
+            .font(Font.badgeText)
+            .foregroundStyle(Color.badgeAI)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color(hex: "#32220A"))
+            .overlay {
+                RoundedRectangle(cornerRadius: .radiusBadge)
+                    .stroke(Color(hex: "#4A3310"), lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: .radiusBadge))
+    }
+
+    private var badgeRecipe: some View {
+        Text("PRECISE")
+            .font(Font.badgeText)
+            .foregroundStyle(Color.badgeRecipe)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color(hex: "#0D1A2A"))
+            .overlay {
+                RoundedRectangle(cornerRadius: .radiusBadge)
+                    .stroke(Color(hex: "#0A2545"), lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: .radiusBadge))
+    }
+
+    private var badgeManual: some View {
+        Text("MANUAL")
+            .font(Font.badgeText)
+            .foregroundStyle(Color.badgeRecipe)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color(hex: "#0D1A2A"))
+            .overlay {
+                RoundedRectangle(cornerRadius: .radiusBadge)
+                    .stroke(Color(hex: "#0A2545"), lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: .radiusBadge))
     }
 }
 

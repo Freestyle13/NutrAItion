@@ -11,8 +11,13 @@ final class AppState {
     var userProfile: UserProfile?
     let healthKitManager = HealthKitManager()
     var todaysMacroTargets: MacroTargets?
+    let engineCoordinator = EngineCoordinator()
     /// Set when today's DayLog/effort is computed (Phase 4+). Nil = show placeholder in dashboard.
     var todaysEffortLevel: EffortLevel?
+
+    /// Transient UI pulse used for "entry logging confirmation" animations.
+    /// Set to `true` briefly after a new `FoodEntry` is saved.
+    var justLoggedFoodEntry: Bool = false
 
     let foodDatabaseService = FoodDatabaseService()
 
@@ -42,5 +47,14 @@ final class AppState {
             bodyWeightKg: profile.currentWeightKg,
             leanMassKg: profile.leanMassKg
         )
+    }
+
+    @MainActor
+    func triggerJustLoggedAnimation(duration: Duration = .milliseconds(600)) {
+        justLoggedFoodEntry = true
+        Task { @MainActor in
+            try? await Task.sleep(for: duration)
+            justLoggedFoodEntry = false
+        }
     }
 }

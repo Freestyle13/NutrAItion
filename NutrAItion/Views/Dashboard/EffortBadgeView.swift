@@ -11,22 +11,11 @@ struct EffortBadgeView: View {
     private var color: Color {
         guard let level else { return .gray }
         switch level {
-        case .rest: return .gray
-        case .low: return .blue
-        case .moderate: return .green
-        case .high: return .orange
-        case .veryHigh: return .red
-        }
-    }
-
-    private var icon: String {
-        guard let level else { return "minus" }
-        switch level {
-        case .rest: return "bed.double.fill"
-        case .low: return "figure.walk"
-        case .moderate: return "flame"
-        case .high: return "flame.fill"
-        case .veryHigh: return "flame.circle.fill"
+        case .rest: return .effortRest
+        case .low: return .effortLow
+        case .moderate: return .effortModerate
+        case .high: return .effortHigh
+        case .veryHigh: return .effortVeryHigh
         }
     }
 
@@ -35,17 +24,16 @@ struct EffortBadgeView: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.subheadline)
+        HStack(spacing: 10) {
+            Circle()
+                .fill(color)
+                .frame(width: 10, height: 10)
+
             Text(label)
-                .font(.subheadline)
+                .font(Font.entryMeta)
+                .foregroundStyle(Color.textMuted)
                 .fontWeight(.medium)
         }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(color, in: Capsule())
     }
 }
 

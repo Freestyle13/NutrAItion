@@ -12,6 +12,7 @@ struct ServingSizePickerView: View {
     var onDismiss: () -> Void
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(AppState.self) private var appState
     @State private var servingMultiplier: Double = 1.0
     @State private var selectedServingOptionIndex: Int = 0
     @State private var selectedMealType: MealType = .lunch
@@ -114,8 +115,23 @@ struct ServingSizePickerView: View {
             mealType: selectedMealType,
             confidence: confidence
         )
+
+        guard let profile = appState.userProfile else {
+            modelContext.insert(entry)
+            try? modelContext.save()
+            onLog()
+            return
+        }
+
         modelContext.insert(entry)
+        let synchronizer = DayLogSynchronizer(
+            healthKitManager: appState.healthKitManager,
+            calendar: Calendar.current
+        )
+        synchronizer.attachFoodEntryToDayLog(entry, modelContext: modelContext, userProfile: profile)
         try? modelContext.save()
+        // Trigger a brief animation pulse on the macro summary bar.
+        appState.triggerJustLoggedAnimation()
         onLog()
     }
 }

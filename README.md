@@ -23,6 +23,7 @@ moving to the next prompt.
 | PHASE-3-nutrition.md | Open Food Facts (barcode) + USDA (search), food log UI, manual entry, custom recipes |
 | PHASE-4-5-ai-engine.md | Claude API, chat logger, adaptive TDEE engine |
 | PHASE-6-polish.md | Trends view, onboarding, settings, TestFlight |
+| PHASE-7-design.md | Final visual polish (design system, app icon, launch screen) |
 
 **Step 3 — Use CURSOR-QUICK-REFERENCE.md when stuck**
 Copy-paste prompts for common situations: Xcode errors, empty HealthKit 
@@ -40,6 +41,8 @@ data, malformed API responses, debugging the learning engine.
 | 4-5 | ~12 hrs | AI chat logger + adaptive learning engine |
 | 6 | ~8 hrs | Polished app ready for TestFlight |
 | **Total** | **~50 hrs** | **V1 on TestFlight** |
+
+Phase 7 (`PHASE-7-design.md`) completes final UI polish (design system + app icon/launch screen) after Phase 6.
 
 At a pace of ~6-8 hrs/weekend: **6-7 weekends** to a working beta.
 

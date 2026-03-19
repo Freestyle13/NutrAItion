@@ -227,7 +227,7 @@ Step 2 — Select trailing window
 
 Step 3 — Calculate average daily intake
 - Sum all FoodEntry calories in the window
-- Weight .precise entries at 1.0, .estimated entries at 0.7
+- Weight .precise entries at 1.0, .manual entries at 1.0, .estimated entries at 0.7
 - Divide by number of days to get weightedAverageIntake
 
 Step 4 — Calculate average effort adjustment
